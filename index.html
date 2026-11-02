@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>My Ultimate Investor Modeling OS</title>
+<meta name="description" content="Everything you hold in private markets, and when it might pay you back. Runs entirely in your browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+  /* THE LOOK. Modelled on Apple's product pages: a quiet grey ground, white cards with soft
+     depth instead of borders, big tight headlines, one blue for anything you can press, and
+     numbers set in the text face with even-width digits rather than a code font. */
+  :root{
+    --bg:#F5F5F7; --card:#FFFFFF; --ink:#1D1D1F; --muted:#6E6E73; --faint:#86868B; --rule:#D2D2D7; --hair:#E8E8ED;
+    --blue:#0071E3; --link:#0066CC; --navy:#1D1D1F; --green:#248A3D; --red:#D70015; --amber:#B25000;
+    --vc:#7B5EA7; --inc:#B17930; --all:#2E6B52;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Inter","Segoe UI",system-ui,sans-serif;
+    --mono:var(--font);
+    --shadow:0 1px 2px rgba(0,0,0,.04),0 6px 24px rgba(0,0,0,.05);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.47 var(--font);letter-spacing:-.01em;
+       -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+  .wrap{max-width:1180px;margin:0 auto;padding:56px 22px 96px}
+  .eyebrow{font-size:14px;font-weight:600;color:var(--amber);margin:0 0 6px;letter-spacing:0}
+  h1{font-size:48px;line-height:1.08;font-weight:700;margin:0 0 10px;color:var(--ink);letter-spacing:-.025em}
+  h2{font-size:21px;line-height:1.2;font-weight:600;letter-spacing:-.015em;color:var(--ink);margin:0 0 12px}
+  h3{font-size:15px;font-weight:600;letter-spacing:-.01em;margin:0 0 8px}
+  .sub{color:var(--muted);margin:0 0 36px;font-size:21px;line-height:1.38;font-weight:400;max-width:720px}
+  .card{background:var(--card);border-radius:18px;box-shadow:var(--shadow);padding:28px 32px;margin-bottom:20px}
+  .note{font-size:15px;color:var(--muted);line-height:1.6;max-width:880px}
+  .note b{color:var(--ink);font-weight:600}
+  .muted{color:var(--muted)}
+  .warn{color:var(--red);font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  th{font-size:12px;letter-spacing:0;color:var(--muted);text-align:right;padding:10px 12px;border-bottom:1px solid var(--rule);font-weight:600}
+  th.l,td.l{text-align:left}
+  td{text-align:right;padding:10px 12px;border-bottom:1px solid var(--hair)}
+  tr:last-child td{border-bottom:none}
+  .z{color:#C7C7CC}
+  .neg{color:var(--red);font-weight:600}
+  .pos{color:var(--green)}
+  .b{font-weight:600}
+  .hi{background:#F2F8F3}
+  button{font:inherit;font-size:14px;font-weight:500;padding:8px 16px;border:none;background:rgba(0,0,0,.05);
+         color:var(--ink);border-radius:980px;cursor:pointer;transition:background .15s,color .15s}
+  button:hover{background:rgba(0,0,0,.09)}
+  button.on{background:var(--blue);color:#fff;font-weight:500}
+  button.on:hover{background:#0077ED}
+  button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+  input,select{font:inherit;color:var(--ink)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+
+  /* Navigation: a frosted bar that stays put while you scroll, grouped by area. */
+  .tabs{position:sticky;top:0;z-index:30;display:flex;flex-wrap:wrap;align-items:flex-end;gap:4px 6px;
+        margin:0 -22px 26px;padding:10px 22px 12px;background:rgba(245,245,247,.82);
+        -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+        border-bottom:1px solid rgba(0,0,0,.08)}
+  .tabs button{font-size:14px;padding:6px 11px;background:none;color:var(--ink);font-weight:500;border-radius:980px}
+  .tabs button:hover{background:rgba(0,0,0,.06)}
+  .tabs button.on{background:var(--ink);color:#fff}
+  .tabs .tg{display:flex;flex-direction:column;padding-right:6px;margin-right:2px;border-right:1px solid rgba(0,0,0,.08)}
+  .tabs .tg:last-child{border-right:none}
+  .tabs .tgl{font-size:11px;letter-spacing:.02em;color:var(--faint);font-weight:600;padding:0 11px 3px;white-space:nowrap}
+  .tabs .tgb{display:flex;flex-wrap:wrap;gap:2px}
+  .ptitle{margin:6px 0 26px}
+  .ptitle small{display:block;font-size:14px;color:var(--muted);font-weight:600;margin-bottom:2px}
+  .ptitle b{display:block;font-size:40px;line-height:1.1;font-weight:700;color:var(--ink);letter-spacing:-.028em}
+
+  /* Intake */
+  .drop{border:1.5px dashed var(--rule);border-radius:18px;padding:44px 22px;text-align:center;background:#FBFBFD;transition:.15s}
+  .drop.over{border-color:var(--blue);background:#F0F6FE}
+  .drop h3{margin:0 0 6px;font-size:24px;font-weight:600;letter-spacing:-.02em}
+  .drop p{margin:0 0 18px;color:var(--muted);font-size:15px}
+  #demo{background:var(--blue);color:#fff} #demo:hover{background:#0077ED}
+  .privacy{display:inline-flex;gap:8px;align-items:center;font-size:13px;color:var(--muted);margin-top:18px}
+
+  /* Folded depth: "How to read this" reads as a link, Apple style. */
+  details.more{margin-top:14px}
+  details.more>summary{cursor:pointer;list-style:none;padding:6px 0;font-size:15px;font-weight:400;color:var(--link);display:inline-flex;align-items:center;gap:6px}
+  details.more>summary::-webkit-details-marker{display:none}
+  details.more>summary::after{content:'';width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);margin-left:2px;transition:transform .2s}
+  details.more[open]>summary::after{transform:rotate(45deg) translate(-2px,-2px)}
+  details.more>summary:hover{text-decoration:underline}
+  details.more>.note{margin-top:4px}
+  details.more>.note:last-child{margin-bottom:4px}
+  .glos{display:flex;gap:22px;margin-bottom:14px;align-items:flex-start}
+  .glos .t{flex:0 0 200px;font-weight:600;font-size:15px}
+  .glos .d{flex:1;color:var(--muted);font-size:15px;line-height:1.6}
+  .kpi{display:flex;gap:30px;flex-wrap:wrap;margin-top:8px}
+  .kpi div small{display:block;font-size:13px;color:var(--muted);font-weight:500}
+  .kpi div span{font-size:26px;font-weight:600;letter-spacing:-.02em}
+  .err{background:#FFF4F2;border-radius:12px;padding:14px 16px;color:#A3001A;font-size:15px;margin-bottom:14px}
+  .hidden{display:none}
+  .cap{margin:-6px 0 18px;font-size:15px;color:var(--muted)}
+  .note.key{color:var(--ink);background:#F5F5F7;padding:12px 16px;border-radius:12px}
+  details.tip{margin:4px 0 8px}
+  details.tip>summary{cursor:pointer;font-size:14px;color:var(--link);list-style:none;display:inline-block}
+  details.tip>summary::-webkit-details-marker{display:none}
+  details.tip[open]>summary{color:var(--ink)}
+
+  /* Hover readouts: every chart mark carrying a tooltip shows it at once in this box. */
+  .tipbox{position:fixed;z-index:60;pointer-events:none;max-width:340px;padding:10px 13px;border-radius:12px;
+          background:rgba(29,29,31,.92);color:#fff;font-size:13px;line-height:1.5;white-space:pre-line;
+          -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 10px 30px rgba(0,0,0,.22)}
+  .tipbox::first-line{font-weight:600}
+  #out [data-tip]{cursor:crosshair}
+  #out svg rect[fill="transparent"][data-tip]:hover{fill:rgba(0,0,0,.045)}
+  #out svg [data-tip]:not([fill="transparent"]):hover{opacity:.82}
+
+  /* Whole-portfolio tabs (markets-ui.js) */
+  .mk-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+  .mk-head h2{margin:0}
+  .mk-tag{font-size:12px;color:var(--amber);background:#FFF5EB;border-radius:980px;padding:4px 11px;font-weight:500}
+  .mk-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:22px 24px;margin-top:14px}
+  .mk-kpi small{display:block;font-size:13px;color:var(--muted);font-weight:500;margin-bottom:2px}
+  .mk-kpi b{display:block;font-size:30px;line-height:1.15;font-weight:600;letter-spacing:-.025em;color:var(--ink)}
+  .mk-kpi b.neg{color:var(--red)} .mk-kpi b.pos{color:var(--green)}
+  .mk-kpi span{display:block;font-size:13px;color:var(--muted);margin-top:3px}
+  .mk-bar{display:flex;height:34px;border-radius:10px;overflow:hidden;gap:2px;background:#fff}
+  .mk-bar>div{color:#fff;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;min-width:0;overflow:hidden;white-space:nowrap}
+  .mk-bar>div:hover{filter:brightness(1.08)}
+  .mk-legend{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:14px;font-size:14px;color:var(--muted)}
+  .mk-legend b{color:var(--ink);font-weight:600}
+  .mk-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:7px;vertical-align:middle}
+  .mk-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:0 20px}
+  .mk-grid2>.card{min-width:0}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .chip{padding:6px 14px;font-size:13px}
+  .mk-scopes{display:flex;flex-direction:column;gap:8px}
+  .mk-chiplab{font-size:12px;color:var(--faint);font-weight:600;min-width:84px}
+  .mk-sep{width:1px;height:20px;background:var(--rule);margin:0 4px}
+  .mk-strong{font-weight:600} .mk-muted{color:var(--muted)}
+  .mk-sym{display:block;font-weight:600} .mk-name{display:block;font-size:13px;color:var(--muted)}
+  .mk-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  th.mk-sort{cursor:pointer;user-select:none} th.mk-sort:hover,th.mk-sort.on{color:var(--ink)}
+  .mk-rb{display:flex;flex-direction:column;gap:4px;min-width:90px;padding:3px 0}
+  .mk-rb>div{height:6px;background:#F2F2F4;border-radius:3px;overflow:hidden}
+  .mk-rb i{display:block;height:100%;background:#AEAEB2;border-radius:3px} .mk-rb i.r{background:#FF3B30}
+  .mk-rl{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+  table.mk-tight td,table.mk-tight th{padding:8px 10px}
+  table.mk-corr td{font-size:13px;padding:7px 8px} table.mk-corr th{text-align:center}
+  .mk-dl{display:grid;grid-template-columns:1fr 1fr;gap:16px 24px;margin:8px 0 0}
+  .mk-dl div{border-top:1px solid var(--hair);padding-top:10px} .mk-dl dt{font-size:13px;color:var(--muted)}
+  .mk-dl dd{margin:2px 0 0;font-size:22px;font-weight:600;letter-spacing:-.02em}
+  .mk-status{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:4px 0 6px;font-size:15px}
+  .pill{display:inline-block;padding:5px 12px;border-radius:980px;font-size:13px;font-weight:600}
+  .pill.ok{background:#E9F6EC;color:var(--green)} .pill.warn{background:#FFF3E5;color:var(--amber)}
+  .pill.bad{background:#FFECEE;color:var(--red)} .pill.up{background:#E8F2FE;color:var(--blue)}
+  .mk-chart{overflow-x:auto;margin-top:6px} .mk-chart svg{width:100%;min-width:560px;height:auto;display:block}
+  .mk-halo{paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round}
+  .mk-hist{margin-top:18px} .mk-hist svg{min-width:0}
+  .mk-chart .ax{font-size:11px;fill:#86868B;font-family:var(--font)}
+  .mk-inline{font-size:14px;color:var(--muted);margin-top:14px}
+  .mk-inline input{font-size:14px;padding:4px 8px;border:1px solid var(--rule);border-radius:8px}
+  .mk-form{display:flex;flex-wrap:wrap;gap:12px 16px;align-items:flex-end}
+  .mk-form label{display:flex;flex-direction:column;font-size:13px;color:var(--muted);gap:5px}
+  .mk-form input,.mk-form select{font-size:15px;padding:9px 12px;border:1px solid var(--rule);border-radius:10px;background:#fff;min-width:0}
+
+  /* Tax Strategies (taxes-ui.js) */
+  .tx-row{display:flex;flex-wrap:wrap;gap:14px 18px;align-items:flex-end}
+  .tx-f{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--muted);min-width:170px}
+  .tx-f select,.tx-in input{font-size:15px;padding:9px 12px;border:1px solid var(--rule);border-radius:10px;background:#fff;width:100%}
+  .tx-f select:focus,.tx-in input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,113,227,.18)}
+  .tx-in{position:relative;display:block}
+  .tx-in.m input{padding-left:24px} .tx-in.m::before{content:'$';position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--faint);font-size:15px}
+  .tx-in.p input{padding-right:28px} .tx-in.p::after{content:'%';position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--faint);font-size:15px}
+  .tx-switch input{width:20px;height:20px;accent-color:var(--blue);margin:9px 0}
+  .tx-lib{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+  .tx-card{display:flex;flex-direction:column;gap:6px;text-align:left;padding:18px 18px 16px;border-radius:16px;background:#F5F5F7;
+           border:1.5px solid transparent;font-weight:400;color:var(--ink);min-height:150px}
+  .tx-card:hover{background:#FFF;border-color:var(--blue)}
+  .tx-card small{font-size:12px;color:var(--muted);font-weight:600}
+  .tx-card b{font-size:19px;font-weight:600;letter-spacing:-.02em}
+  .tx-card span{font-size:14px;color:var(--muted);line-height:1.45;flex:1}
+  .tx-card em{font-style:normal;font-size:14px;color:var(--link);font-weight:500}
+  .tx-card.soon{opacity:.55;cursor:default} .tx-card.soon:hover{background:#F5F5F7;border-color:transparent}
+  .tx-card.soon em{color:var(--muted)}
+  .tx-plan .mk-head{align-items:flex-start;margin-bottom:16px}
+  .tx-step{display:block;font-size:13px;color:var(--muted);font-weight:600;margin-bottom:2px}
+  .tx-tags{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .tx-x{background:none;color:var(--link);padding:5px 8px} .tx-x:hover{background:none;text-decoration:underline}
+  .tx-groups{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:0 32px}
+  .tx-group{border-top:1px solid var(--hair);margin-top:18px;padding-top:16px;min-width:0}
+  .tx-group .tx-f{min-width:120px;flex:1}
+  .tx-in input::-webkit-outer-spin-button,.tx-in input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .tx-in input{-moz-appearance:textfield}
+  .mk-kpis+.tx-row,.tx-row+.mk-kpis{margin-top:22px}
+  .tx-group h3{color:var(--ink)}
+
+  /* Plan includes (Retirement), the retirement effect line and growth slider (Tax Strategies) */
+  .inc-list{display:flex;flex-direction:column;gap:2px;margin-bottom:6px}
+  .inc-row{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--hair);cursor:pointer}
+  .inc-row:first-child{border-top:none}
+  .inc-row input{width:20px;height:20px;accent-color:var(--blue);margin:1px 0 0;flex:0 0 auto}
+  .inc-row span{display:flex;flex-direction:column;gap:2px} .inc-row small{font-size:14px;color:var(--muted)}
+  .inc-row.off{cursor:default;padding-left:32px} .inc-row.off b{color:var(--muted);font-weight:600}
+  .tx-effect{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px;background:#F5F5F7;border-radius:12px;padding:12px 16px;margin:0 0 6px;font-size:15px}
+  .tx-effect span{font-size:13px;color:var(--muted);font-weight:600} .tx-effect b{font-weight:600} .tx-effect small{color:var(--muted);font-size:13px}
+  .tx-slider{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--muted)}
+  .tx-slider input{width:180px;accent-color:#34C759} .tx-slider b{color:var(--ink);min-width:44px}
+  @media (max-width:700px){ .tabs .tg{border-right:none;margin-right:0;padding-right:0} .mk-dl{grid-template-columns:1fr} }
+  button.linkish{background:none;padding:0;color:var(--link);font-size:inherit;font-weight:400}
+  button.linkish:hover{background:none;text-decoration:underline}
+  footer{color:var(--faint);font-size:12px;margin-top:40px;line-height:1.7;border-top:1px solid var(--rule);padding-top:16px}
+  a{color:var(--link)}
+  .ver{position:fixed;left:12px;bottom:12px;z-index:20;font-size:11px;color:var(--muted);background:rgba(255,255,255,.8);
+       -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);border-radius:980px;padding:5px 12px;opacity:.8;
+       transition:opacity .15s;cursor:pointer;user-select:none;box-shadow:0 1px 6px rgba(0,0,0,.08)}
+  .ver:hover{opacity:1;background:rgba(255,255,255,.95)}
+  .mask{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.35);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+        display:flex;align-items:center;justify-content:center;padding:20px}
+  /* .hidden is declared earlier in this sheet, so on equal specificity .mask's display:flex
+     won and the dialog opened on load. Two classes beat one. */
+  .mask.hidden{display:none}
+  .modal{background:var(--card);border-radius:20px;max-width:680px;width:100%;max-height:86vh;overflow:auto;padding:32px 34px;box-shadow:0 24px 70px rgba(0,0,0,.25)}
+  .modal h3{margin:0 0 2px;font-size:28px;font-weight:700;letter-spacing:-.02em}
+  .modal .when{font-size:13px;color:var(--muted);margin:0 0 18px}
+  .modal h4{margin:20px 0 6px;font-size:17px}
+  .modal p,.modal li{font-size:15px;line-height:1.6;color:#424245}
+  .modal .rel{border-top:1px solid var(--hair);padding-top:16px;margin-top:20px}
+  .modal .tag{display:inline-block;font-size:12px;color:var(--muted);background:#F5F5F7;border-radius:980px;padding:3px 10px;margin-bottom:8px}
+  .modal .close{margin-top:22px}
+  @media (max-width:700px){ .wrap{padding:28px 16px 70px} h1{font-size:34px} .sub{font-size:18px} .ptitle b{font-size:30px}
+    .card{padding:22px 18px;border-radius:16px;overflow-x:auto} td,th{padding:8px 8px}
+    /* One swipeable row of tabs on a phone, so the pinned bar stays one line tall. */
+    .tabs{margin:0 -16px 20px;padding:8px 16px 10px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+    .tabs::-webkit-scrollbar{display:none}
+    .tabs .tg{flex:0 0 auto} .tabs .tgb{flex-wrap:nowrap}
+    .glos{display:block} .glos .t{margin-bottom:4px} .ver{left:8px;bottom:8px;font-size:10px} }
+
+  /* ── 2026-10-31 hardening (markets-ui, consider-ui, ux.js) ─────────────────────────────
+     DARK MODE. The colour tokens above are redefined for a dark system setting. Cards,
+     text and rules follow the tokens; hard-coded light fills drawn by app.js (light panel
+     backgrounds, dark chart ink, pale grid lines) are mapped by attribute so charts stay
+     legible. Verified in jsdom for structure only, not visually. */
+  @media (prefers-color-scheme: dark) {
+    :root{ --bg:#000000; --card:#1C1C1E; --ink:#F5F5F7; --muted:#A1A1A6; --faint:#8E8E93; --rule:#3A3A3C; --hair:#2C2C2E;
+      --blue:#0A84FF; --link:#4DA3FF; --navy:#F5F5F7; --green:#30D158; --red:#FF453A; --amber:#FF9F0A;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 24px rgba(0,0,0,.35); }
+    button{background:rgba(255,255,255,.08);color:var(--ink)} button:hover{background:rgba(255,255,255,.14)}
+    .tabs{background:rgba(22,22,24,.82);border-bottom-color:rgba(255,255,255,.08)}
+    .tabs button:hover{background:rgba(255,255,255,.08)} .tabs button.on{background:var(--ink);color:#000}
+    .tabs .tg{border-right-color:rgba(255,255,255,.1)}
+    .drop{background:#141416} .drop.over{background:#0B1A2B}
+    .err{background:#3A1214;color:#FFB4AB}
+    .note.key,.tx-effect,.tx-card{background:#2C2C2E} .tx-card:hover{background:#1C1C1E}
+    .mk-bar{background:var(--card)} .mk-tag{background:#3A2A12}
+    .mk-form input,.mk-form select,.tx-f select,.tx-in input,.mk-inline input{background:#2C2C2E;color:var(--ink);border-color:var(--rule)}
+    .pill.ok{background:#12301A} .pill.warn{background:#3A2A12} .pill.bad{background:#3A1214} .pill.up{background:#0B1A2B}
+    .hi{background:#12301A} .z{color:#636366}
+    .mk-halo{stroke:var(--card)} .mk-rb>div{background:#2C2C2E}
+    .ver{background:rgba(44,44,46,.85)} .modal p,.modal li{color:#D1D1D6} .modal .tag{background:#2C2C2E}
+    #out svg text{fill:var(--ink)} #out svg .ax{fill:var(--muted)}
+    #out svg [stroke="#1D1D1F"],#out svg [stroke="#141A22"]{stroke:var(--ink)}
+    #out svg [fill="#1D1D1F"],#out svg [fill="#141A22"]{fill:var(--ink)}
+    #out svg [stroke="#E8E8ED"],#out svg [stroke="#F0F0F2"],#out svg [stroke="#EDF1F6"],#out svg [stroke="#E4E9F0"],#out svg [stroke="#D2D2D7"]{stroke:var(--hair)}
+    #out svg [fill="#fff"],#out svg [fill="#F7F9FC"]{fill:var(--card)}
+    #out [style*="background:#FDF6EE"],#out [style*="background:#F0F5FB"],#out [style*="background:#FDF3EC"],#out [style*="background:#F1F7F3"],#out [style*="background:#EDF1F6"],#out [style*="background:#fff"]{background:#2C2C2E !important}
+    #out [style*="color:#141A22"],#out [style*="color:#2B4058"],#out [style*="color:#415061"]{color:var(--ink) !important}
+    #out [style*="color:#7A4A15"],#out [style*="color:#9A5B14"],#out [style*="color:#7A3A15"]{color:var(--amber) !important}
+  }
+
+  /* Disabled controls look disabled (UX-32). */
+  button:disabled,button[disabled]{opacity:.4;cursor:not-allowed}
+  button.on:disabled:hover{background:var(--blue)}
+  button.busy{opacity:.7;cursor:progress;pointer-events:none}
+  /* Visible focus for everything a keyboard can reach (UX-52). */
+  a:focus-visible,summary:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,th button:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:4px}
+  #out svg [tabindex]:focus{outline:none;stroke:var(--blue);stroke-width:2}
+  html{scroll-padding-top:120px}
+  /* Sortable column headings are buttons that look like headings. */
+  .mk-sortbtn{background:none;padding:0;font:inherit;font-size:12px;font-weight:600;color:inherit;border-radius:4px}
+  .mk-sortbtn:hover{background:none;color:var(--ink)}
+  /* Money still owed to deals is an obligation, not a loss: neutral ink (UX-10). */
+  .owed{color:var(--ink);font-weight:600}
+  .mk-tag-own{color:var(--muted);background:var(--hair)}
+  .mk-notes ul{margin:6px 0 0 18px;padding:0} .mk-notes{margin:0 0 16px}
+  .mk-steps{margin:4px 0 0 20px;padding:0;font-size:15px;line-height:1.6}
+  .mk-c-show{display:none}
+  .cs-err{display:block;font-size:13px;color:var(--red);margin-top:2px;max-width:260px}
+  .cs-hint{font-size:13px;color:var(--muted);margin:6px 0 0}
+  .cs-actions{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin:14px 0 6px}
+  .cs-error{color:var(--red)}
+  input[aria-invalid="true"]{border-color:var(--red) !important}
+  /* The version pill now sits in the footer, in the flow, so it never covers content (UX-42). */
+  .ver{position:static;display:inline-block;margin-left:6px;opacity:1}
+  .landing-help{margin:14px 0 0;font-size:14px;color:var(--muted)}
+  /* Touch: every tap target at least 44px tall (UX-49). */
+  @media (pointer:coarse){ button,.chip,summary,.tabs button,select,input{min-height:44px} details.more>summary,details.tip>summary{display:inline-flex;align-items:center} }
+  @media (max-width:700px){
+    /* More tabs off to the right: fade the edge until the reader scrolls there (UX-48). */
+    .tabs.more-right{-webkit-mask-image:linear-gradient(90deg,#000 82%,transparent);mask-image:linear-gradient(90deg,#000 82%,transparent)}
+    /* Holdings on a phone: Value sits next to the name; account moves under it. */
+    .mk-c-hide{display:none} .mk-c-show{display:block}
+    .mk-kpis{grid-template-columns:1fr 1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">Atlas &amp; Index &middot; Prototype</p>
+  <h1>My Ultimate Investor Modeling OS</h1>
+  <p class="sub">Everything you own, when you can reach it, and whether it lasts.</p>
+
+  <div class="card" id="intake">
+    <div class="drop" id="drop">
+      <h3>Drop your tracker here</h3>
+      <p>.xlsx or .csv, one row per private deal. It needs a deal name and a commitment for each; Balances, Holdings and History tabs are optional.</p>
+      <div class="row" style="justify-content:center;margin:0">
+        <button id="pick">Choose file</button>
+        <button id="demo">Run the example book</button>
+      </div>
+      <input type="file" id="file" accept=".xlsx,.xls,.csv" class="hidden">
+      <p class="landing-help">New here? <a href="tracker-template.xlsx" download>Download the tracker template (.xlsx)</a> to see the layout.</p>
+      <div class="privacy">
+                <span>Runs in your browser. Nothing is uploaded.</span>
+      </div>
+    </div>
+    <div id="intakeErr"></div>
+  </div>
+
+  <div id="out" class="hidden"></div>
+
+  <footer>
+    Not advice. The probabilities are assumptions, meant to be argued with.
+  </footer>
+</div>
+
+<button class="ver" id="ver" type="button" title="What changed, and when" aria-haspopup="dialog"></button>
+
+<div class="mask hidden" id="relMask">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="relTitle">
+    <h3 id="relTitle">What&rsquo;s new</h3>
+    <p class="when" id="relWhen"></p>
+
+    <div class="rel">
+      <span class="tag">prototype &nbsp;&middot;&nbsp; 31 Oct 2026</span>
+      <h4>One household on every tab, and safer what-ifs</h4>
+      <ul>
+        <li><b>One household everywhere.</b> A Balances tab now drives Overview, Holdings, the Equity Curve and Retirement alike (then a Holdings tab, then the sample household), and a Balances tab is no longer read as balance history.</li>
+        <li><b>What If I Add This Deal? is a preview.</b> Run it changes nothing; Add to my Retirement plan includes the deal, with Remove beside it. Past years, impossible paid-in figures and commitments larger than your public investments are refused with a message.</li>
+        <li><b>A new book starts clean:</b> a considered deal, filters and balances recorded this session no longer carry over to the next file.</li>
+        <li><b>Percent cells read the way you typed them:</b> &quot;1%&quot;, &quot;1.2%&quot; and 1.2 are all about one percent, never 100 times that.</li>
+        <li><b>New random streams.</b> Every deal now has its own seeded stream, so adding a deal never reshuffles the futures of the deals you already hold. Figures moved slightly once because of it.</li>
+        <li>Plain words: Chance the money lasts, Still to pay in, Paid in, a Terms card on Help, a Start Here card on Overview, and dark mode.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <span class="tag">prototype &nbsp;&middot;&nbsp; 29 Oct 2026</span>
+      <h4>My Ultimate Investor Modeling OS</h4>
+      <ul>
+        <li><b>Retirement now says what it includes:</b> capital calls still owed (on by default), your tax strategies, and a deal you are considering, each with the plan with and without it.</li>
+        <li><b>What If I Add This Deal?</b> on the Deal Library: a deal's own range and its effect on your retirement.</li>
+        <li><b>If You Invest What It Saves</b> on Tax Strategies: the savings compounding at a rate you choose, and the break-even rate.</li>
+        <li><b>Solar investment credit</b> joins Tax Strategies: 30% off the tax itself for projects in service by the end of 2027, depreciation, income, and the 5-year clawback.</li>
+        <li><b>Oil and gas drilling</b> joins Tax Strategies: intangible drilling costs deducted up front, declining production taxed after depletion, working interest against limited partner.</li>
+        <li>The What-If tab is removed.</li>
+        <li><b>Cost segregation</b> joins Tax Strategies: deductions moved forward, recapture at a sale, and whether you can use the loss at all.</li>
+        <li><b>Roth conversion</b> joins Tax Strategies: tax now against tax-free withdrawals later, with the rate you pay compared to the rate you avoid. Pair it with Heavy Machinery and the deduction absorbs the conversion.</li>
+      </ul>
+      <h4>Tax Strategies, five accounts, a new look</h4>
+      <ul>
+        <li><b>Tax Strategies tab.</b> Pick a strategy, set its terms, see the tax saved and owed back year by year. Heavy Machinery and Workforce Housing to start; more plug in. Send the plan to What-If in one click.</li>
+        <li><b>Five accounts:</b> IRA and Self-Directed IRA (pre-tax), Roth IRA, Private Deals and Brokerage (taxable).</li>
+        <li><b>Equity Curve:</b> a new plan every Jan 1, from the Dec 31 balance.</li>
+        <li><b>Hover any chart</b> for the numbers behind it.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <span class="tag">prototype &nbsp;&middot;&nbsp; 28 Oct 2026</span>
+      <h4>One tool instead of five</h4>
+      <p>Built on the Financial Planning OS (v1.50): the private-deal dashboard, the liquidity outlook
+        and the Retirement Simulator are unchanged.</p>
+      <p><b>New: the What-If tab.</b> Your plan beside a few changes to it, run through the same simulation
+        with the same random draws so only the change differs. It models:</p>
+      <ul>
+        <li><b>Tax plays</b>, once or year after year: Workforce Housing and Heavy Machinery, using a verified
+          port of the two published federal tax models (6,145 checks, matching to the cent). Stacked plays
+          are measured against the income left after the ones before, so they never double-count.</li>
+        <li><b>A new private deal</b>: calls, coupon and exit (simplified, without ranges).</li>
+        <li><b>Capital calls you still owe</b> on your current deals, which the Retirement Simulator leaves out.</li>
+      </ul>
+      <p>The demo profile is a fictional sample household. Federal tax only. Not tax or financial advice.</p>
+    </div>
+
+    <div class="close">
+      <button type="button" id="relClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="engine.js?v=h1"></script>
+<!-- THE FORK POINT, and the only place the two apps differ. runway.js and runway-ui.js load
+     BEFORE app.js because the tab registers itself on window.APP_PLUGINS, which app.js reads
+     once as it builds its tab list. Load them after and the tab silently never appears. -->
+<!-- app.js fetches the example book tagged with the engine version, so an edited book with the
+     same version is served from the browser cache. Refresh that cache entry on every load. -->
+<script>try { fetch('example-book.json?v=' + encodeURIComponent(Engine.CFG.version), { cache: 'reload' }); } catch (e) {}</script>
+<script src="history.js?v=h1"></script>
+<script src="markets.js?v=h1"></script>
+<script src="runway.js?v=h1"></script>
+<script src="portfolio.js?v=h1"></script>
+<script src="runway-ui.js?v=h1"></script>
+<script src="taxplay.js?v=h1"></script>
+<script src="taxes-ui.js?v=h1"></script>
+<script src="includes.js?v=h1"></script>
+<script src="consider-ui.js?v=h1"></script>
+<script src="markets-ui.js?v=h1"></script>
+<script src="ux.js?v=h1"></script>
+<script>window.APP_TAB_LABELS = { dash: 'Deals', outlook: 'Liquidity Outlook', perf: 'Returns',
+  about: 'Help', universe: 'Deal Library' };</script>
+<script src="app.js?v=h1"></script>
+</body>
+</html>

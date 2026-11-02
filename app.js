@@ -1,0 +1,2655 @@
+/* Exit Timing Calendar: UI (prototype fork).
+ *
+ * Reads a tracker (xlsx or csv), runs the engine, renders four panels plus a glossary.
+ * Nothing leaves the browser: the file is read with FileReader and parsed in-page.
+ *
+ * ============================================================================
+ * PORTING GUIDE (written 2026-10-31 for the React port; read this first)
+ * ============================================================================
+ *
+ * PURPOSE
+ *   The private-deal half of the app: intake (spreadsheet to rows), enrichment from the
+ *   shared deal files, validation messages, and the base tabs (Deals, Liquidity Outlook,
+ *   Returns, Glossary, Deal Library). All modelling lives in engine.js; this file only reads
+ *   input, calls Engine, and writes HTML strings into #out / #tabbody / #intakeErr.
+ *
+ * DEPENDENCIES (globals)
+ *   Engine            engine.js (must load first)
+ *   XLSX              SheetJS, for readFile only
+ *   window.APP_PLUGINS     [{ id, label, after, render(host, ctx) }] extra tabs (other files)
+ *   window.APP_TAB_LABELS  { dash, outlook, perf, about, universe } tab renames
+ *   window.PlanIncludes    optional; told about every new book (remember(ctx))
+ *   DOM ids: #out, #intakeErr, #pick, #file, #demo, #drop, #ver, #relMask, #relWhen, #relClose
+ *
+ * DATA FLOW
+ *   readFile(file) -> XLSX workbook -> readWorkbook(wb) -> { sheets, rows, skipped }
+ *   load(rows, skipped, sheets) -> enrich(rows) [deal files] -> validate(rows) [problems]
+ *     -> Engine.buildBook(rows) [+ Engine.bookWarnings] -> BOOK -> render()
+ *   Plugins receive ctx = { book: BOOK, mode: MODE, sheets: SHEETS } where SHEETS is
+ *   { sheetName: arrayOfRows } for EVERY sheet in the workbook (QA C1: it used to stop at
+ *   the positions sheet, so a You or Balances tab placed after it never arrived).
+ *   On every successful load a 'privatedeals:book' event is dispatched on window with the
+ *   same ctx as detail, for modules that need the current book without opening a tab.
+ *
+ * STATE (module level, reset by load)
+ *   BOOK, MODE ('all' | 'venture' | 'income'), DIST, TAB, OPEN (expanded cards), DEALSORT,
+ *   SHEETS, LASTMAP (header map of the sheet read), UNMATCHED (rows no deal file matched),
+ *   DEALIDX / DEALALL (deal index and files; a failed fetch is NOT cached, so it retries).
+ *
+ * INVARIANTS
+ *   - Every value from a tracker or a deal file goes through esc() before it reaches HTML.
+ *   - A failed upload changes nothing: the previous BOOK and SHEETS stay paired.
+ *   - Problems are reported, never silently fixed: validate() and Engine.bookWarnings().
+ *   - No em dashes in user-visible copy (house rule); an empty cell shows DASH (an en dash,
+ *     the same glyph the Overview uses).
+ *
+ * TEST HOOK
+ *   window.AppIntake = { FIELDS, mapHeaders, rowsFromSheet, readWorkbook, validate } exposes
+ *   the pure intake functions to tests/intake.test.mjs. Nothing in the app reads it.
+ */
+(function () {
+  'use strict';
+
+  const $ = (s) => document.querySelector(s);
+  const money = (v) => (v < 0 ? '-$' : '$') + Math.round(Math.abs(v)).toLocaleString('en-US');
+  /* Money that has to fit in a chart column 26 to 48 pixels wide. money() writes
+     "$248,000", which does not. */
+  const moneyTight = (v) => {
+    const a = Math.abs(v);
+    if (a < 1000) return '$' + Math.round(a);
+    /* Test the ROUNDED thousands, not the raw value: 999,500 is under a million and still
+       rounds to 1000k, which is not a number anybody writes. */
+    if (Math.round(a / 1000) < 1000) return '$' + Math.round(a / 1000) + 'k';
+    return '$' + (a / 1000000).toFixed(a < 10000000 ? 1 : 0) + 'M';
+  };
+  const mult = (v) => v.toFixed(2) + 'x';
+  /* A whole percent where the number is whole, one decimal where it is not. It printed
+     Asilia's 1.3% management fee as "1%" on the same card that spelled out "1.2% and 20%"
+     two lines below, so the card disagreed with itself. */
+  const pct = (v) => {
+    const p = v * 100;
+    return (Math.abs(p - Math.round(p)) < 0.05 ? p.toFixed(0) : p.toFixed(1)) + '%';
+  };
+  /* Quotes are escaped too, not just angle brackets. A deal card writes the name into a
+     data- attribute AND reads it back to decide which card is open, so a name like
+     O'Brien's "Fund" used to truncate the attribute at its first inner quote: the card
+     would not open, any markup in the name rendered as real HTML, and the whole row
+     broke. Somebody will name a position with an apostrophe. */
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  /* The empty-cell glyph. An en dash, as the Overview uses, rather than the em dash this
+     file used to print (house rule: no em dashes in anything a reader sees). */
+  const DASH = 'None';
+  /* WHERE THE TEMPLATE IS. A failed upload used to say "The tracker template in the
+     repository has the expected layout", and a member has no repository. The file ships
+     next to this page, so the message links straight to it. */
+  const TEMPLATE_LINK = '<a href="tracker-template.xlsx" download>Download the tracker template '
+    + '(tracker-template.xlsx)</a>';
+
+  let BOOK = null;          // every position
+  let MODE = 'all';         // which book the panels describe
+  let DIST = 'all';         // which curve is in front on the chart
+  let TAB = 'dash';         // 'dash' | 'outlook' | 'about'
+  /* DEAL DATA IS TAGGED WITH THE APP VERSION. GitHub Pages serves everything with
+     max-age=600, so without this a reader gets the previous deal list against a new build
+     for at least ten minutes after a release -- which is how a deal can ship and still be
+     invisible, and how "not written yet" and "your browser is stale" become the same
+     symptom. A version bump busts it once; inside a version the cache still works. */
+  const dealUrl = (slug) => 'deals/' + slug + '.json?v='
+    + encodeURIComponent((Engine.CFG && Engine.CFG.version) || 'dev');
+
+  let DEALIDX = null;       // the shared deal index, loaded once
+  let OPEN = {};            // which deal cards are expanded
+  let DEALSORT = 'tracker'; // by-deal table order; 'tracker' is the order she typed
+
+  /* The shared deal files are fetched once and cached. A failure here is not fatal:
+     the tool still runs on whatever the tracker holds, which is the whole point of the
+     tracker winning. */
+  /* 2026-10-31 (QA M10): A FAILURE IS NOT CACHED. It used to store { deals: [] } for the
+     whole session, so one network blip made every later upload "not in the shared deal
+     files ... and that is normal". Now a failure returns an empty index marked `failed`
+     (matchNote says so plainly) and the next load tries again. */
+  let DEALIDX_FAILED = false;
+  async function loadDealIndex() {
+    if (DEALIDX !== null) return DEALIDX;
+    try {
+      const r = await fetch(dealUrl('index'));
+      if (r && r.ok === false) throw new Error('HTTP ' + r.status);
+      DEALIDX = await r.json();
+      DEALIDX_FAILED = false;
+      return DEALIDX;
+    } catch (e) {
+      DEALIDX_FAILED = true;
+      return { deals: [], failed: true };
+    }
+  }
+  /* Every deal file, fetched once. The index alone carries names and aliases; the terms
+     and the risks live in the files, and the universe tab wants both. */
+  let DEALALL = null;
+  async function loadAllDeals() {
+    if (DEALALL) return DEALALL;
+    const idx = await loadDealIndex();
+    /* TOGETHER, not one after another. Twenty files fetched in sequence left the tab blank
+       for several seconds on a local server, which is the best case; a member on a phone
+       would have concluded the tab was broken. */
+    const out = (await Promise.all((idx.deals || []).map((e) =>
+      fetch(dealUrl(e.slug))
+        .then((r) => r.json())
+        .then((d) => Object.assign({ slug: e.slug }, d))
+        .catch(() => null)          // a file that will not load is simply not listed
+    ))).filter(Boolean);
+    DEALALL = out.sort((a, b) => String(a.name).localeCompare(String(b.name), 'en',
+      { sensitivity: 'base' }));
+    return DEALALL;
+  }
+
+  async function enrich(rows) {
+    const idx = await loadDealIndex();
+    const cache = {};
+    UNMATCHED = [];
+    for (const r of rows) {
+      const hit = Engine.matchDeal(r.name, idx);
+      if (!hit) {
+        /* WHY it failed decides what to tell the holder. A name that matches several deals
+           is a different problem from one the tool has never heard of, and only the first
+           has a one-word fix. Recompute the candidates here rather than changing matchDeal,
+           which is deliberately strict and shared with APEX. */
+        const nm = String(r.name || '').trim().toLowerCase();
+        const near = (idx && idx.deals ? idx.deals : []).filter((d) =>
+          (d.aliases || [d.name]).some((a) => {
+            const al = String(a).trim().toLowerCase();
+            return al && nm && al.length >= 6 && nm.length >= 6
+              && (nm.startsWith(al) || al.startsWith(nm));
+          }));
+        if (nm) UNMATCHED.push({ name: String(r.name).trim(), near: near.map((d) => d.name) });
+        continue;
+      }
+      if (!cache[hit.slug]) {
+        try { cache[hit.slug] = await fetch(dealUrl(hit.slug)).then((x) => x.json()); }
+        catch (e) { cache[hit.slug] = null; }
+      }
+      if (cache[hit.slug]) Object.assign(r, Engine.applyDealFile(r, cache[hit.slug]));
+    }
+    return rows;
+  }
+
+  /* ── reading the tracker ─────────────────────────────────────────────────
+     Headers are matched loosely, because nobody keeps a spreadsheet to someone
+     else's column names. Anything genuinely missing is REPORTED rather than
+     guessed at: an invented input is how these models quietly become fiction. */
+  const FIELDS = [
+    // deliberately FIRST, and deliberately multi-word. A bare 'deals' would be matched
+    // by the 'deal' prefix under 'name' and swallow the deal-name column.
+    ['deals',       ['deals in fund', 'underlying deals', 'number of deals',
+                     'portfolio companies', 'positions in fund', 'deal count']],
+    // optional liquidity window, in FUND-YEARS from funding. A GP who says "years five
+    // through eight" can say exactly that; leaving them blank uses the default rule.
+    // Fund or Single deal, said outright. Clearer than asking for a count, and it is
+    // what people already know about their own positions.
+    /* 'type' is deliberately NOT here. It was, and because `vehicle` is matched before
+       `assetClass`, it took the column off it -- so a tracker predating v1.5, where a
+       column headed "Type" holds "Real Estate", had its asset class read as a vehicle and
+       its asset class left blank. The people most affected were the ones who had been
+       using the tool longest. */
+    ['vehicle',     ['fund or single', 'fund / single', 'vehicle', 'fund?', 'structure']],
+    ['liqFrom',     ['liquidity from', 'payout from', 'sell-down from', 'distributions from']],
+    ['liqTo',       ['liquidity to', 'payout to', 'sell-down to', 'distributions to']],
+    ['name',        ['deal name', 'deal', 'name', 'investment', 'position']],
+    /* WHICH ACCOUNT THE DEAL IS HELD IN. A private deal is not a separate world from the
+       rest of a portfolio -- it sits in an IRA, a Roth, an SDIRA or a taxable account, and
+       without knowing which, allocation cannot be totalled honestly and withdrawal ordering
+       cannot be done at all.
+
+       Optional: a sheet without it parses exactly as before and everything lands in one
+       unnamed account. Account TYPE is deliberately not here -- it is typed once per
+       account on the Balances tab rather than re-typed on every deal row. If it ever does
+       come here, it must be declared ABOVE this entry, because matching is by prefix and a
+       bare 'account' would swallow 'account type'. */
+    /* DECLARED ABOVE `account`, and multi-word, for the reason 'deals in fund' is: the
+       first field whose alias matches an unclaimed header wins, so a bare 'account' takes
+       "Account type" whenever the reader happens to put that column first. It did exactly
+       that -- account read "Roth" instead of "Roth IRA" -- and which way round it fell
+       depended on the reader's own column order, which is not ours to decide. */
+    ['accountType', ['account type', 'account kind', 'registration type', 'tax treatment']],
+    ['account',     ['account', 'held in', 'custodian', 'wrapper', 'registration']],
+    ['assetClass',  ['asset class', 'class', 'type', 'sleeve type']],
+    ['commitment',  ['commitment', 'committed', 'total commitment']],
+    /* BEFORE `funded`, and it has to stay there. Matching is by prefix, so a column headed
+       "Funded year" starts with "funded" and was being read as the funded AMOUNT: a year
+       of 2026 became $2,026 paid in, and the position then showed a six-figure uncalled
+       balance that did not exist. */
+    ['yearFunded',  ['year funded', 'funded year', 'vintage', 'year']],
+    ['funded',      ['funded to date', 'funded', 'paid in', 'contributed']],
+    ['uncalled',    ['uncalled', 'unfunded', 'remaining', 'callable']],
+    /* A CALL YOU ALREADY KNOW ABOUT. Optional; blank behaves exactly as before. Neither of
+       these carries a bare 'next call' alias, and that is deliberate: matching is
+       header.startsWith(alias), so 'next call' would claim a column headed "Next call amount"
+       and read a dollar figure as a date. Same trap as `yearFunded` before `funded`. */
+    ['nextCallDate',   ['next call date', 'next capital call date', 'call date',
+                        'next call expected', 'expected call date']],
+    ['nextCallAmount', ['next call amount', 'next capital call amount', 'call amount',
+                        'next call size']],
+    ['hold',        ['hold', 'hold (yrs)', 'hold years', 'term', 'fund life', 'horizon']],
+    /* 'coupon' stays FIRST and stays supported. The community calls these preferred
+       returns and the app now says so everywhere a member reads, but every tracker
+       already filled in says Coupon, and breaking those to tidy up the wording would
+       be the worst possible trade. */
+    ['coupon',      ['coupon', 'coupon %', 'preferred return %', 'preferred return',
+                     'preferred', 'pref', 'pref %']],
+    /* BEFORE `moic`, and it has to stay there, for exactly the reason `yearFunded` sits
+       before `funded`. Header matching is `k === n || k.startsWith(n)`, so a column headed
+       "MOIC (marked up)" starts with "moic" and would be read as the SPONSOR's multiple --
+       silently turning a holder's paper mark into a forecast input, which is the one thing
+       this feature must never do. Listed first, the marked-up aliases win the header.
+       Aliases are kept long deliberately: a bare 'mark' would capture "Market Value". */
+    ['markedUpMoic', ['marked up moic', 'marked-up moic', 'markup moic', 'marked up multiple',
+                      'moic (marked up)', 'moic marked up', 'current moic', 'paper moic']],
+    ['moic',        ['sponsor moic', 'moic', 'multiple', 'expected moic', 'target multiple']],
+    ['conviction',  ['conviction', 'confidence']],
+    // the holder's own words. Personal, so it lives in THEIR tracker, never in a
+    // shared deal file.
+    ['thesis',      ['thesis', 'why i did it', 'rationale', 'notes', 'my notes']],
+    ['exitEarliest',['exit: earliest', 'earliest', 'exit earliest']],
+    ['exitLikely',  ['exit: likely', 'likely', 'exit likely', 'override likely']],
+    ['exitLatest',  ['exit: latest', 'latest', 'exit latest']],
+  ];
+
+  function mapHeaders(hdr) {
+    const map = {};
+    hdr.forEach((h, i) => {
+      const k = String(h || '').trim().toLowerCase();
+      if (!k) return;
+      for (const [field, names] of FIELDS) {
+        if (map[field] != null) continue;
+        if (names.some((n) => k === n || k.startsWith(n))) { map[field] = i; return; }
+      }
+    });
+    return map;
+  }
+
+  function rowsFromSheet(aoa) {
+    // find the header row: the first row that yields a commitment column
+    let hi = -1, map = null;
+    for (let i = 0; i < Math.min(aoa.length, 12); i++) {
+      const m = mapHeaders(aoa[i] || []);
+      if (m.commitment != null && m.name != null) { hi = i; map = m; break; }
+    }
+    if (hi < 0) return { error: 'Could not find a header row with a deal name and a commitment column.' };
+    LASTMAP = map;   // remembered so the age note can say whether this is an older sheet
+    const out = [], skipped = [];
+    for (let i = hi + 1; i < aoa.length; i++) {
+      const r = aoa[i] || [];
+      const get = (f) => (map[f] != null ? r[map[f]] : '');
+      const name = String(get('name') || '').trim();
+      if (!name || /^total/i.test(name)) continue;
+      const rec = {};
+      FIELDS.forEach(([f]) => { rec[f] = get(f); });
+      rec.name = name;
+      // A real tracker has prose under the table: legends, notes, a worked-example
+      // caption. Those rows have a long first cell and no commitment, and reading them
+      // as positions produced six phantom "problems" on the template's own file.
+      // A row with no commitment is only worth flagging if it looks like a deal.
+      if (!(Engine.num(rec.commitment) > 0)) {
+        if (name.length <= 40 && !/\s\w+\s\w+\s\w+\s/.test(name)) skipped.push(name);
+        continue;
+      }
+      out.push(rec);
+    }
+    return { rows: out, map, skipped };
+  }
+
+  /* Which of the newer optional columns did this sheet have? One member's tracker stopped
+     at Override likely and she had no way to know a newer one existed. The sheet carries
+     its version in cell A1 of Positions, but an OLD sheet has no version to read, so the
+     honest test is whether any of the newer headers were found at all. */
+  function trackerAge(map) {
+    const recent = ['deals', 'liqFrom', 'liqTo', 'thesis', 'vehicle'];
+    const found = recent.filter((f) => map && map[f] != null);
+    return { found: found.length, total: recent.length };
+  }
+
+  function validate(rows, skipped) {
+    const problems = [];
+    rows.forEach((r) => {
+      const where = r.name;
+      if (!Engine.num(r.moic) && !Engine.num(r.coupon))
+        problems.push(where + ': no sponsor multiple and no preferred return, so there is nothing to exit on');
+      /* The engine's default is this calendar year (it was a fixed 2026 until 2026-10-31). */
+      if (!parseInt(r.yearFunded, 10)) problems.push(where + ': no year funded, so it is treated as funded in '
+        + Engine.calendarNow().year + ', which sets when its preferred return and calls start');
+      /* v1.42: the three capital figures must tie. When Funded is blank the engine derives it
+         from the other two; when all three are typed and disagree, nothing can be derived and
+         the reader has to be told which figure the model ran on. */
+      const blank = (v) => v == null || String(v).trim() === '';
+      const cm = Engine.num(r.commitment), fd = Engine.num(r.funded), un = Engine.num(r.uncalled);
+      /* 2026-10-31: only the SHORT case is reported here. A negative figure, or a sum above
+         the commitment, is corrected and reported by Engine.buildBook (QA H6) with the figure
+         it ran on; saying it twice would only bury the line. */
+      const inRange = fd >= 0 && fd <= cm && un >= 0;
+      if (cm > 0 && inRange && !blank(r.funded) && !blank(r.uncalled) && fd + un < cm - 1) {
+        problems.push(where + ': funded ' + money(fd) + ' plus uncalled ' + money(un)
+          + ' does not equal the ' + money(cm) + ' committed. The model calls the uncalled '
+          + 'figure and exits on the commitment, so one of the three is out of date.');
+      }
+    });
+    (skipped || []).forEach((n) => problems.push(n + ': looks like a deal but has no commitment, so it was left out'));
+
+    /* TWO TRANCHES OF ONE DEAL THAT EXIT IN DIFFERENT YEARS. They now share an outcome, so
+       one company can no longer be written off and pay its sponsor case in the same future.
+       The exit year is still each row's own, because overruling what somebody typed is not
+       this tool's job, which leaves a future that cannot happen unless it is pointed out.
+       Grouped on the NAME here because validate runs before the deal files are resolved. */
+    const byName = {};
+    rows.forEach((r) => {
+      const k = String(r.name || '').trim().toLowerCase();
+      if (!k) return;
+      (byName[k] = byName[k] || []).push(r);
+    });
+    Object.keys(byName).forEach((k) => {
+      const g = byName[k];
+      if (g.length < 2) return;
+      const yrs = [...new Set(g.map((r) => String(r.exitLikely || '').trim()).filter(Boolean))];
+      const anyBlank = g.some((r) => !String(r.exitLikely || '').trim());
+      if (yrs.length > 1 || (yrs.length === 1 && anyBlank)) {
+        /* v1.48: lead with what does NOT happen. A member read the old wording as
+           "if I do that it will treat it as one investment" -- the rows stay separate. */
+        problems.push(g[0].name + ': ' + g.length + ' rows of the same deal with different exit '
+          + 'years. They stay ' + g.length + ' separate rows with their own commitments and '
+          + 'funding dates; nothing is merged. But one company has one fate, so they already '
+          + 'share an outcome, and a company only exits once. Put the same exit years on '
+          + (g.length === 2 ? 'both' : 'all of them') + ' and they will pay together.');
+      }
+    });
+    return problems;
+  }
+
+  /* A position the tool could not put a name to. Not an error -- the numbers still run on
+     whatever the holder typed -- but the card will be thinner than the others and nothing
+     else on screen says why. */
+  function matchNote() {
+    /* The deal list itself would not load. Saying "not in the shared deal files, and that is
+       normal" would be false, so this replaces the whole note. */
+    if (DEALIDX_FAILED) {
+      return '<div class="err" style="background:#F0F5FB;border-color:#C9D8E8;color:#2B4058">'
+        + '<b>Could not load the shared deal list</b>, so no terms were filled in from it. '
+        + 'Every position is running on what you typed. Check your connection and load the '
+        + 'file again to retry.</div>';
+    }
+    if (!UNMATCHED.length) return '';
+    const amb = UNMATCHED.filter((u) => u.near.length > 1);
+    const unk = UNMATCHED.filter((u) => u.near.length <= 1);
+    let h = '<div class="err" style="background:#F0F5FB;border-color:#C9D8E8;color:#2B4058">';
+
+    if (amb.length) {
+      h += '<b>' + (amb.length === 1 ? 'One position could' : amb.length + ' positions could')
+        + ' mean more than one deal, so the tool has not guessed.</b> Write the fuller name '
+        + 'and the terms will fill in:<br>'
+        + amb.map((u) => '&bull; <b>' + esc(u.name) + '</b> could be '
+            + u.near.map((x) => esc(x)).join(' or ')).join('<br>');
+      if (unk.length) h += '<br><br>';
+    }
+    if (unk.length) {
+      h += '<b>' + (unk.length === 1 ? 'One position is' : unk.length + ' positions are')
+        + ' not in the shared deal files</b>, so '
+        + (unk.length === 1 ? 'it is running' : 'they are running')
+        + ' on what you typed and nothing else. That is fine, and it is normal: most '
+        + 'portfolios hold things this tool has never been shown. It only matters if you expected '
+        + 'the terms to fill in themselves, in which case check the spelling against the '
+        + 'deal list:<br>'
+        + unk.map((u) => '&bull; ' + esc(u.name)
+            + (u.near.length === 1 ? ' <span class="muted">(close to ' + esc(u.near[0])
+              + '. Is that the same deal?)</span>' : '')).join('<br>');
+    }
+    return h + '</div>';
+  }
+
+  function ageNote(map) {
+    const a = trackerAge(map);
+    if (a.found > 0) return '';
+    return '<div class="err" style="background:#F0F5FB;border-color:#C9D8E8;color:#2B4058">'
+      + '<b>This looks like an older tracker.</b> It works, and nothing you have typed is '
+      + 'wasted. A newer one adds a few optional columns: whether a position is a fund or a '
+      + 'single deal, when a sponsor says it pays out, and your own note on why you did it. '
+      + 'All of them can be left blank. The current tracker is marked '
+      + Engine.CFG.trackerVersion + ' in the top-left cell of its Positions tab.</div>';
+  }
+
+  /* ── panels ──────────────────────────────────────────────────────────────── */
+
+  function subset(mode) {
+    if (mode === 'venture') return BOOK.filter((b) => b.kind === 'venture');
+    if (mode === 'income') return BOOK.filter((b) => b.kind === 'income');
+    return BOOK;
+  }
+
+  /* ── the three tabs ───────────────────────────────────────────────────────
+     Dashboard is what you hold now. Liquidity Outlook is when it comes back and how
+     much. Background is the assumptions, so the other two can be argued with. */
+  /* RENAMEABLE, and exactly one of them needs to be. "Loaded GC Deals" names a community,
+     which is right in the Growth Circle app and wrong in a generically-named one that ships
+     fictional demo deals. The next app sets window.APP_TAB_LABELS in its own index.html, the
+     same shape as APP_PLUGINS, so app.js stays byte-identical in both and the live app --
+     which sets nothing -- is unchanged. */
+  const LABELS = (typeof window !== 'undefined' && window.APP_TAB_LABELS) || {};
+  const BASE_TABS = [['dash', 'Private Deal Dashboard'], ['outlook', 'Liquidity Outlook'],
+                     ['perf', 'Performance & Returns'], ['about', 'Glossary & Background'],
+                     ['universe', 'Loaded GC Deals']]
+    .map(([k, label]) => [k, LABELS[k] || label]);
+  /* A tab's name as the bar shows it, escaped, for copy that points the reader at a tab. */
+  const tabLabel = (k) => esc((BASE_TABS.find(([x]) => x === k) || [k, k])[1]);
+
+  /* EXTENSION POINT, and it is deliberately tiny. The next-generation app is this app plus
+     extra script tags: app.js and engine.js stay byte-identical in both, so a fix made here
+     rolls forward by a straight copy and a gate proves it arrived. Only index.html differs.
+
+     With nothing registered, window.APP_PLUGINS is undefined and TABS is exactly the list
+     above -- an extension point that quietly changes the thing it extends would be worse
+     than a fork, so a test asserts that. A plugin names the tab it wants to sit after. */
+  const PLUGINS = (typeof window !== 'undefined' && window.APP_PLUGINS) || [];
+
+  /* Every sheet of the last workbook read, by name, as arrays-of-arrays. Populated on
+     import and handed to plugins; nothing in this app reads it. */
+  let SHEETS = {};
+
+  const TABS = (() => {
+    const out = BASE_TABS.slice();
+    PLUGINS.forEach((p) => {
+      if (!p || !p.id || !p.label) return;
+      const at = out.findIndex(([k]) => k === p.after);
+      out.splice(at < 0 ? out.length : at + 1, 0, [p.id, p.label]);
+    });
+    return out;
+  })();
+
+  function render() {
+    if (!BOOK || !BOOK.length) return;
+    $('#out').classList.remove('hidden');
+    $('#out').innerHTML = '<div class="row tabs">'
+      + TABS.map(([k, l]) => '<button data-tab="' + k + '"' + (TAB === k ? ' class="on"' : '')
+          + '>' + l + '</button>').join('')
+      + '</div><div id="tabbody"></div>';
+    document.querySelectorAll('[data-tab]').forEach((b) => {
+      b.onclick = () => { TAB = b.getAttribute('data-tab'); render(); };
+    });
+    const plug = PLUGINS.find((p) => p && p.id === TAB);
+    if (plug) { plug.render($('#tabbody'), { book: BOOK, mode: MODE, sheets: SHEETS }); return; }
+    if (TAB === 'dash') renderDashboard();
+    else if (TAB === 'about') renderBackground();
+    else if (TAB === 'universe') renderUniverse();
+    else if (TAB === 'perf') renderPerf();
+    else renderOutlook();
+  }
+
+  /* Expected proceeds for one position, on the model's own outcome table. Kept here so
+     the dashboard and the cards cannot compute it two different ways. */
+  /* The branch odds, in words, read from the engine so the prose cannot drift away from
+     the model it describes. */
+  const SCALED = { venture: false, income: true, fundVenture: true, reEquity: true };
+
+  function branchOdds(kind, terse) {
+    /* The tables hang straight off CFG as CFG.venture / CFG.income, not under a
+       `branches` key. Reading the wrong path returned [] and shipped a sentence with a
+       hole in it: "a single venture deal is ." */
+    const t = (Engine.CFG || {})[kind] || [];
+    if (!t.length) return '';
+    const acc = t.reduce((a, b) => a + b[0], 0);
+    const p = (v) => Math.round(v * 100) + '%';
+    if (terse) return t.map((b) => Math.round(b[0] * 100)).join('/') + '/' + Math.round((1 - acc) * 100);
+    /* A BRANCH'S THIRD ELEMENT SAYS WHETHER ITS MULTIPLE IS ABSOLUTE. Before v1.35 every
+       table this sentence described stated absolute multiples, so branch two could be called
+       "back at cost" and branch three read straight off the table. The real-estate table
+       breaks both: its branch two is 0.70x, which is BELOW cost, and its branch three is a
+       fraction of the sponsor's target rather than a multiple of capital. Describing it with
+       the old words produced a sentence about a table that does not exist. */
+    const words = t.map((b, i) => {
+      const abs = b[2] === true || !SCALED[kind];
+      if (b[1] === 0) return 'written off';
+      if (!abs) return 'at ' + Math.round(b[1] * 100) + '% of the sponsor case';
+      if (Math.abs(b[1] - 1) < 0.005) return 'back at cost';
+      return 'at ' + b[1].toFixed(2) + 'x' + (b[1] < 1 ? ' (below cost)' : '');
+    });
+    return t.map((b, i) => p(b[0]) + ' ' + words[i])
+      .join(', ') + ' and ' + p(1 - acc) + ' at the sponsor case';
+  }
+
+  function expectedOf(x) {
+    let acc = 0, e = 0;
+    /* A BRANCH MAY STATE AN ABSOLUTE MULTIPLE EVEN IN A TABLE THAT SCALES -- the third
+       element says so. Without that test this scaled the real-estate table's loss buckets by
+       the sponsor's target and read Philo at 1.45x while the simulation on the next tab said
+       1.22x. It must stay the same arithmetic as the draw site in engine.js; the only reason
+       the figure is computed twice is that this one is exact rather than sampled. */
+    for (const br of x.branches) {
+      acc += br[0];
+      e += br[0] * (x.scales && br[2] !== true ? br[1] * x.exitMult : br[1]);
+    }
+    e += (1 - acc) * x.exitMult;
+    /* Summed year by year rather than rate x hold x commitment: the base ramps while
+       capital is still being called, so the shortcut overstates a part-funded position. */
+    let pref = 0;
+    for (let k = 1; k <= x.hold; k++) pref += Engine.prefInYear(x, k);
+
+    /* AND THE SCHEDULE IS NOT THE EXPECTATION. The simulation impairs a preferred return by
+       how the deal went -- a write-off pays a quarter of it, a well-below outcome 70% -- so
+       summing the contract gave a figure the rest of the app never produces. Under a heading
+       that reads "What the model makes of it", beside "Expected exit", a reader adds the two
+       and is 4% to 9% high on every coupon-paying deal on file. Weighted the same way the
+       multiple above is, and over the same branches, so the two halves of the card cannot
+       disagree about which outcome they are describing. */
+    let pw = 0, pacc = 0;
+    for (const br of x.branches) {
+      const m = x.scales && br[2] !== true ? br[1] * x.exitMult : br[1];
+      pacc += br[0];
+      pw += br[0] * Engine.prefFactor(x, m);
+    }
+    pw += (1 - pacc) * Engine.prefFactor(x, x.exitMult);
+    return { mult: e, exit: x.commitment * e, pref: pref * pw, prefScheduled: pref };
+  }
+
+  function clsColour(c) {
+    return ({ 'Venture': '#7B5EA7', 'VC': '#7B5EA7', 'Real Estate': '#2E6B52',
+              'Private Equity': '#2563EB', 'Private Credit': '#B17930' })[c] || '#6B7A8C';
+  }
+
+  /* v1.42: from the engine's exit plan, the same years the Positions table, the ladder and the
+     simulation use. It read fy + window / fy + hold, so a typed "Exit likely" moved every
+     other panel and left the deal card naming the old year. */
+  function payWindow(x) {
+    const ys = Engine.exitPlan(x, 0).map((p) => p[0]);
+    const w = ys.length > 1 ? ys[0] + '–' + ys[ys.length - 1] : String(ys[0]);
+    const tags = [];
+    if (isEvergreen(x)) tags.push('<span class="muted" title="An evergreen fund is not sold. '
+      + 'This is your capital coming back as redemptions, at 1.0x; the preferred return is the '
+      + 'real return.">capital back</span>');
+    if (x.isFund && !x.liqStated) tags.push('<span class="muted" title="Derived from the hold, '
+      + 'because Liquidity from and Liquidity to are blank. Fill them in (fund-years) to set '
+      + 'the payout years yourself.">derived</span>');
+    return w + (tags.length ? ' ' + tags.join(' ') : '');
+  }
+
+  /* AN EVERGREEN FUND DOES NOT EXIT. Raised by a member (Asilia Credit Fund
+     Evergreen, 2026-10-04): the page called its payout an exit, so she asked how to move the
+     exit. There is no sale; what the model places in those years is her capital coming back
+     as redemptions, at 1.0x. Display only: the numbers do not change. */
+  function isEvergreen(b) {
+    return /evergreen/i.test((b.deal && b.deal.vehicle) || '') || /evergreen/i.test(b.name || '');
+  }
+
+  /* "I PUT 2035 AS THE EARLIEST EXIT AND NOTHING CHANGED." A fund pays across its liquidity
+     window, and with Liquidity from and to blank that window is derived from the hold; Exit:
+     earliest never enters into it. Say so, by name, with the fix, rather than leave a typed
+     value silently ignored. */
+  function windowNote(book) {
+    const hit = book.filter((b) => b.isFund && !b.liqStated && b.earliestTyped);
+    if (!hit.length) return '';
+    return '<p class="note warn"><b>Exit: earliest does not move a fund’s payout.</b> '
+      + hit.map((b) => esc(b.name) + ' pays across ' + payWindow(b).replace(/ <span[\s\S]*$/, '')).join('; ')
+      + ', derived from ' + (hit.length === 1 ? 'its' : 'each one’s') + ' hold. A fund pays '
+      + 'across a window rather than on one date, so to change it fill in <b>Liquidity from</b> '
+      + 'and <b>Liquidity to</b>, in years from funding: 10 and 10 puts it all in year ten.</p>';
+  }
+
+  /* ── DASHBOARD ────────────────────────────────────────────────────────────
+     Reads the same book off the same engine as the Outlook tab, so the two cannot
+     describe a deal differently. */
+  /* WHEN CONTRACTUAL MONEY MOVES. Money you are obliged to send against money the documents
+     promise you. Lives on Liquidity Outlook, because it is a timing question; it used to sit
+     on the dashboard next to the allocation pie, which answers a different one. */
+  /* EVERY POSITION AND WHAT THE MODEL MAKES OF IT. This is reference about what you hold,
+     so it belongs beside the allocation rather than buried among the timing charts. */
+  function panelPositions(book) {
+    let h = '';
+    h += '<div class="card"><h2>Your positions</h2>'
+      + '<p class="note">Every position, and what the model makes of it. Exit proceeds run off the '
+      + '<b>commitment</b>, not off what you have funded, because the whole commitment is called long '
+      + 'before an exit lands. A deal paying a preferred return exits on the <b>residual</b> multiple, '
+      + 'because a sponsor MOIC already contains that income and counting both would count it twice.</p>'
+      + '<p class="note">A <b>fund</b> pays out across its sell-down window rather than on one date. '
+      + 'Anything paying a preferred return is treated as a fund unless you put 1 in the deals column, '
+      + 'and a venture fund holding ' + Engine.CFG.fundMinDeals + '+ deals is priced as a portfolio '
+      + 'rather than as one company.</p>'
+      + '<table><tr><th class="l">Deal</th><th class="l">Sleeve</th><th>Deals</th><th>Commitment</th>'
+      + '<th>Uncalled</th><th>Preferred rate</th><th>Sponsor MOIC</th><th>Exit multiple</th><th>Exit</th></tr>'
+      + book.slice().sort((p, q) => p.name.localeCompare(q.name, 'en', { sensitivity: 'base' }))
+        .map((b) => '<tr><td class="l">' + esc(b.name) + '</td>'
+        + '<td class="l" style="color:' + (b.kind === 'venture' ? '#7B5EA7' : '#B17930') + '">'
+        + (b.kind === 'venture' ? 'Venture' : esc(b.cls)) + '</td>'
+        + '<td class="' + (b.isFund ? 'b' : 'z') + '">' + (b.isFund ? (b.deals > 1 ? b.deals : 'fund') : '1') + '</td>'
+        + '<td>' + money(b.commitment) + '</td>'
+        + '<td class="' + (b.uncalled > 0 ? 'neg' : 'z') + '">' + (b.uncalled > 0 ? money(b.uncalled) : DASH) + '</td>'
+        + '<td class="' + (b.coupon ? 'pos' : 'z') + '">' + (b.coupon ? (b.coupon * 100).toFixed(1) + '%' : DASH) + '</td>'
+        /* A multiple nobody supplied is marked, here as on the card: with no MOIC given the
+           tool derives one from the preferred rate (1 + rate x hold) or falls back to 5.0x. */
+        + '<td>' + mult(b.moic) + (b.moicGiven ? '' : ' <span class="muted" title="No sponsor '
+          + 'multiple was given; this is the tool’s assumption">(assumed)</span>') + '</td>'
+        + '<td class="b">' + mult(b.exitMult) + '</td>'
+        + '<td>' + payWindow(b) + '</td></tr>').join('')
+      + '</table>' + windowNote(book) + '</div>';
+
+    return h;
+  }
+
+  function panelCalls(b) {
+    let h = '';
+    /* v1.42: the ENGINE'S calendar, sized to the book. It was a fixed ten years from 2026, so
+       a call or preferred return after 2035 dropped off and the column stopped tying to
+       "Still callable". */
+    const yrs = Engine.gridYears(b);
+    const calls = {}, prefs = {};
+    yrs.forEach((y) => { calls[y] = 0; prefs[y] = 0; });
+    /* THE ENGINE'S SCHEDULE, not a second copy of it. This panel used to spread uncalled
+       capital itself, so the rule lived in two files and the two could drift without either
+       looking wrong. It is the same function the simulation calls. */
+    const eCalls = Engine.callSchedule(b, yrs);
+    yrs.forEach((y) => { calls[y] = eCalls[y] || 0; });
+    const notes = Engine.callNotes(b);
+    /* And the engine's coupon schedule, not a fourth copy of the loop that builds it. */
+    const ePref = Engine.couponSchedule(b, yrs);
+    yrs.forEach((y) => { prefs[y] = ePref[y] || 0; });
+    const peak = Math.max(1, ...yrs.map((y) => Math.max(calls[y], prefs[y])));
+    const who = positionsByYear(b);
+    const tipAttr = (y, field, total) => ' title="' + esc(barTip(who, y, field, total)) + '"';
+    /* "DOES THE EXIT CALENDAR RUN ON THE CURRENT DATE?" -- a member, 2026-10-01,
+       looking at -$258,333 against 2026 and reasonably unable to tell whether that was called
+       so far, still to come, or the year in total. It is the year in total, it is modelled
+       rather than scheduled, and part of it is already in the past. The panel now says so. */
+    /* The engine's clock, not a second one: CFG.asOf when pinned, today otherwise. */
+    const nowY = Engine.calendarNow().year;
+    h += '<div class="card"><h2>Capital calls vs. preferred income</h2>'
+      + '<p class="note"><b>Contractual items only.</b> Money you are obliged to send, against '
+      + 'money the documents promise you. Exits are left out on purpose: an exit is a hope, '
+      + 'a preferred return is a promise. Exits are on ' + tabLabel('perf') + '.</p>'
+      + '<p class="note"><b>Where you have not told it otherwise, the timing is modelled rather '
+      + 'than scheduled.</b> Sponsors rarely publish a call schedule, so the tool takes whatever '
+      + 'is still uncalled and spreads it evenly over about three years from the year after you '
+      + 'funded. Your uncalled figure is what is left <b>as of today</b>, so none of it is placed '
+      + 'in time already gone: ' + nowY + ' shows only what is still ahead this year, and a '
+      + 'spread that would have started earlier starts now and runs on into a later year. Where '
+      + 'a fund\u2019s file records the pace it calls at, the balance runs off at that pace '
+      + 'instead.</p>'
+      + '<p class="note"><b>If you know when your next call is due, say so and this stops '
+      + 'guessing.</b> Add a <b>Next call date</b> column to your tracker, and a <b>Next call '
+      + 'amount</b> if you know it. Any spelling of the date works (2027, Q1 2027, '
+      + 'March 2027), because only the year is used: this calendar is annual. With both, '
+      + 'that amount lands in that year and the rest spreads after it. With the date alone, '
+      + 'nothing is shown arriving before it.</p>'
+      + (notes.stated.length
+          ? '<p class="note"><b>Taken from your tracker, not modelled:</b> '
+            + notes.stated.map((x) => esc(x.name) + ': '
+                /* "on Nov 17 2026" for a full date, "in Q1 2027" otherwise (UX-29). */
+                + (x.amount > 0 ? money(x.amount) + (/\b\d{1,2},?\s+\d{4}\b/.test(String(x.raw || '')) ? ' on ' : ' in ') : 'from ')
+                + (x.raw ? esc(x.raw) : x.year)).join('; ') + '.</p>'
+          : '')
+      + (notes.undated.length
+          ? '<p class="note warn"><b>An amount with no date cannot be placed.</b> '
+            + notes.undated.map((x) => esc(x.name) + ' (' + money(x.amount) + ')').join(', ')
+            + (notes.undated.length === 1 ? ' states' : ' state')
+            + ' a next call amount but no date, so '
+            + (notes.undated.length === 1 ? 'that row falls' : 'those rows fall')
+            + ' back to the even spread. '
+            + 'Putting the money in the next year would be inventing the very thing '
+            + 'the column exists to stop. Add a date and it will be used.</p>'
+          : '')
+      + '<table style="margin-top:12px"><tr><th class="l">Year</th><th>Capital calls out</th>'
+      + '<th>Preferred in (contractual)</th><th>Net</th><th class="l" style="width:40%">&nbsp;</th></tr>'
+      + yrs.filter((y) => calls[y] > 0 || prefs[y] > 0).map((y) => {
+          const net = prefs[y] - calls[y];
+          /* The current year is the only one a reader is standing inside, so it is the only one
+             where "the whole year" and "what is left" differ. Approximate on purpose: it is an
+             even spread within an even spread, and a precise-looking figure would overstate
+             what the tool actually knows. */
+          /* The split only makes sense for a MODELLED year. A call the holder dated themselves
+             has a real date, and pro-rating it by months would be the tool second-guessing the
+             one person who actually knows. */
+          /* v1.42: the engine no longer places a call in time already gone, so the current
+             year IS what is still ahead; the old pro-rated note would shrink it a second time. */
+          const ahead = '';
+          return '<tr><td class="l b">' + y + (y === nowY
+            ? ' <span class="muted" style="font-size:10px">this year</span>' : '') + '</td>'
+            + '<td class="' + (calls[y] ? 'neg' : 'z') + '"'
+            + (calls[y] ? tipAttr(y, 'call', calls[y]) + ' style="cursor:help"' : '') + '>'
+            + (calls[y] ? '-' + money(calls[y]) + ahead : DASH) + '</td>'
+            + '<td class="' + (prefs[y] ? 'pos' : 'z') + '"'
+            + (prefs[y] ? tipAttr(y, 'pref', prefs[y]) + ' style="cursor:help"' : '') + '>'
+            + (prefs[y] ? money(prefs[y]) : DASH) + '</td>'
+            + '<td class="' + (net < 0 ? 'neg' : 'pos') + '">' + money(net) + '</td>'
+            + '<td class="l"><div style="display:flex;align-items:center;gap:3px">'
+            + '<div style="flex:1;display:flex;justify-content:flex-end"><div style="height:11px;width:'
+            + (calls[y] / peak * 100) + '%;background:var(--red);border-radius:2px 0 0 2px'
+            + (calls[y] ? ';cursor:help"' + tipAttr(y, 'call', calls[y]) : '"') + '></div></div>'
+            + '<div style="flex:1"><div style="height:11px;width:' + (prefs[y] / peak * 100)
+            + '%;background:var(--green);border-radius:0 2px 2px 0'
+            + (prefs[y] ? ';cursor:help"' + tipAttr(y, 'pref', prefs[y]) : '"') + '></div></div>'
+            + '</div></td></tr>';
+        }).join('')
+      + '</table>' + whoCalls(b) + '</div>';
+
+    return h;
+  }
+
+  /* WHICH COMPANIES ARE CALLING, AND WHICH ARE PAYING, IN EACH YEAR. Asked for by a member
+     on 2026-10-04, after the same breakdown appeared under the ladder. Both sides
+     of this panel are contractual rather than simulated, so both are honestly attributable:
+     the calls come from the engine's own schedule and the preferred return from prefInYear.
+
+     A table rather than a hover, like the ladder's, because this is a comparison and a tooltip
+     cannot be read beside the year above it. */
+  /* One per-position split of the calls and preferred columns, shared by the breakdown
+     table below and the hover on the bars, so the two can never disagree. */
+  function positionsByYear(book) {
+    const rows = {};
+    const add = (y, name, cls, kind, field, v) => {
+      if (!(v > 0.5)) return;
+      const g = (rows[y] = rows[y] || {});
+      const r = (g[name] = g[name] || { name, cls, kind, call: 0, pref: 0 });
+      r[field] += v;
+    };
+    for (const b of book) {
+      const c = Engine.callsOf(b);
+      for (const y of Object.keys(c)) add(+y, b.name, b.cls, b.kind, 'call', c[y]);
+      if (b.coupon > 0) {
+        for (let k = 1; k <= b.hold; k++) {
+          add(b.fy + k, b.name, b.cls, b.kind, 'pref', Engine.prefInYear(b, k));
+        }
+      }
+    }
+    return rows;
+  }
+
+  /* HOVER ON THE RED AND GREEN BARS. Asked for by a member on 2026-10-04: point at
+     a year's calls or preferred income and see which positions make it up, the way the
+     ladder's blocks and lines already do. Native tooltips, like the ladder, so the two charts
+     behave the same. The table under the panel stays, because it can be read side by side. */
+  function barTip(rows, y, field, total) {
+    const list = Object.keys(rows[y] || {}).map((k) => rows[y][k])
+      .filter((x) => x[field] > 0.5).sort((a, b2) => b2[field] - a[field]);
+    const head = y + (field === 'call' ? ': capital calls out' : ': preferred income in (contractual)');
+    const sign = field === 'call' ? '-' : '';
+    const lines = list.map((x) => x.name + ': ' + sign + money(x[field]));
+    if (list.length > 1) lines.push('Total: ' + sign + money(total));
+    return head + '\n' + lines.join('\n');
+  }
+
+  function whoCalls(book) {
+    const rows = positionsByYear(book);
+    const years = Object.keys(rows).map(Number).sort((a, b2) => a - b2);
+    if (!years.length) return '';
+
+    let t = '<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:600;'
+      + 'font-size:13px">Which positions call, and which pay, in each year</summary>'
+      + '<p class="note" style="margin-top:10px">The same two columns as above, split by '
+      + 'position. <b>Both sides are contractual</b> rather than simulated: a call is money you '
+      + 'are obliged to send and a preferred return is money the documents promise you, so '
+      + 'unlike the outcome charts these can be attributed exactly. A call with no date of its '
+      + 'own is spread evenly, which the note above the table explains.</p>'
+      /* PRE-EMPTING THE OBVIOUS COMPARISON. The same preferred return appears on the
+         ladder at a lower figure, because there it sits beside probability-weighted
+         exits and is weighted the same way. Both are right for their own panel and a
+         reader putting them side by side has every reason to think one is wrong. */
+      + '<p class="note"><b>These preferred figures are the full contractual schedule</b>, '
+      + 'which is why they are higher than the gold lines on the liquidity ladder. There '
+      + 'the same income is weighted by how the deal actually goes, because it sits beside '
+      + 'exit proceeds that are weighted too. Here nothing is weighted: this panel is what '
+      + 'the documents say, not what the model expects.</p>'
+      + '<table style="margin-top:8px"><tr><th class="l">Year</th><th class="l">Position</th>'
+      + '<th>Calls out</th><th>Preferred in</th><th>Net</th></tr>';
+    for (const y of years) {
+      const list = Object.keys(rows[y]).map((k) => rows[y][k])
+        .sort((a, b2) => (b2.call + b2.pref) - (a.call + a.pref));
+      let yc = 0, yp = 0;
+      list.forEach((x, i) => {
+        yc += x.call; yp += x.pref;
+        t += '<tr><td class="l b">' + (i === 0 ? y : '') + '</td>'
+          + '<td class="l"><span style="display:inline-block;width:8px;height:8px;'
+          + 'border-radius:50%;background:' + clsColour(x.kind === 'venture' ? 'Venture' : x.cls)
+          + ';margin-right:6px"></span>' + esc(x.name) + '</td>'
+          + '<td class="' + (x.call > 0 ? 'neg' : 'z') + '">'
+          + (x.call > 0 ? '-' + money(x.call) : DASH) + '</td>'
+          + '<td class="' + (x.pref > 0 ? 'pos' : 'z') + '">'
+          + (x.pref > 0 ? money(x.pref) : DASH) + '</td>'
+          + '<td class="' + (x.pref - x.call < 0 ? 'neg' : 'pos') + '">'
+          + money(x.pref - x.call) + '</td></tr>';
+      });
+      if (list.length > 1) {
+        t += '<tr class="hi"><td class="l"></td><td class="l b">' + y + ' total</td>'
+          + '<td class="' + (yc ? 'neg' : 'z') + '">' + (yc ? '-' + money(yc) : DASH) + '</td>'
+          + '<td class="' + (yp ? 'pos' : 'z') + '">' + (yp ? money(yp) : DASH) + '</td>'
+          + '<td class="b">' + money(yp - yc) + '</td></tr>';
+      }
+    }
+    return t + '</table></details>';
+  }
+
+  function renderDashboard() {
+    const b = BOOK;
+    const sum = (f) => b.reduce((a, x) => a + f(x), 0);
+    const committed = sum((x) => x.commitment);
+    const funded = sum((x) => x.funded);
+    const uncalled = sum((x) => x.uncalled);
+    const expExit = sum((x) => expectedOf(x).exit);
+    const expPref = sum((x) => expectedOf(x).pref);
+    const expTotal = expExit + expPref;
+    const sponsorWt = committed > 0 ? sum((x) => x.moic * x.commitment) / committed : 0;
+
+    let h = '<div class="card"><h2>Your portfolio</h2>'
+      + '<div class="kpi">'
+      + kpi('Positions', b.length) + kpi('Committed', money(committed))
+      + kpi('Funded', money(funded))
+      + kpi('Still callable', money(uncalled), uncalled > 0 ? 'neg' : '')
+      + kpi('Sponsor MOIC', mult(sponsorWt))
+      + kpi('Modelled MOIC (average)', mult(committed > 0 ? expTotal / committed : 0), 'b')
+      + '</div>'
+      /* This figure is NOT sampled. expectedOf walks each deal's four outcome branches and
+         weights them exactly, so there is no path count to quote here -- the simulated
+         figures live on Liquidity Outlook. Saying "the average of N futures" would have been
+         a plain untruth about how this number is made. */
+      /* The odds below are read from CFG.branches rather than typed, because a number in
+         prose that quietly stops matching the model is worse than no number. NOTE it is not
+         "four outcomes for every deal": a fund holding 20+ deals gets a wider ladder, and
+         SpaceStation is the largest position in this book. */
+      + '<p class="note" style="margin-top:12px"><b>Two multiples, on purpose.</b> The '
+      + '<b>Sponsor MOIC</b> is what these deals return <b>if they work</b>. The '
+      + '<b>Modelled MOIC</b> weighs every outcome by how likely it is: a single venture deal '
+      + 'is ' + branchOdds('venture') + '. The income sleeves are far tighter at '
+      + branchOdds('income', true) + ', and a fund holding ' + Engine.CFG.fundMinDeals + ' or more deals gets its own '
+      + 'wider ladder. <b>Real estate that pays no preferred return</b> sits between the two at '
+      + branchOdds('reEquity', true) + '. It can go to zero, because that is what a '
+      + 'mortgage does, but nothing like one deal in three, and the outcome it produces most '
+      + 'often is a haircut rather than either extreme. The modelled MOIC is an <b>average</b> '
+      + 'across those outcomes. One big winner lifts an average above what most futures pay, '
+      + 'so ' + tabLabel('perf') + ' leads with the <b>median</b>, the typical future, and that '
+      + 'is the one to plan against. Of the average, '
+      + money(expPref) + ' comes from preferred return and ' + money(expExit)
+      + ' comes from exits.</p></div>';
+
+    const byCls = {};
+    b.forEach((x) => {
+      const c = x.kind === 'venture' ? 'Venture' : x.cls;
+      byCls[c] = (byCls[c] || 0) + x.commitment;
+    });
+    const entries = Object.entries(byCls).sort((p, q) => q[1] - p[1]);
+    h += '<div class="card"><h2>Your allocation</h2>'
+      + '<p class="note">On capital <b>committed</b>, not on current value. A private deal is '
+      + 'only revalued when the sponsor sends a new statement.</p>'
+      + '<div style="display:flex;height:30px;border-radius:6px;overflow:hidden;margin:14px 0 10px">'
+      + entries.map(([c, v]) => '<div style="width:' + (v / committed * 100) + '%;background:'
+          + clsColour(c) + ';display:flex;align-items:center;justify-content:center;color:#fff;'
+          + 'font-size:12px;font-weight:700">' + (v / committed > 0.07 ? pct(v / committed) : '')
+          + '</div>').join('')
+      + '</div><div class="row">'
+      + entries.map(([c, v]) => '<span style="display:flex;align-items:center;gap:7px;font-size:13px;'
+          + 'color:var(--muted)"><span style="width:11px;height:11px;border-radius:3px;background:'
+          + clsColour(c) + '"></span>' + esc(c) + ' <b style="color:var(--ink)">' + money(v)
+          + '</b></span>').join('')
+      + '</div></div>';
+
+    h += panelPositions(b);
+
+    h += '<div class="card"><h2>Your deals</h2>'
+      /* Alphabetical. The book arrives in spreadsheet-row order, which is whatever order the
+         holder happened to type things in and is no help at all when you are looking for one
+         deal in thirteen. localeCompare so accented and punctuated names sort sensibly. */
+      + b.slice().sort((p, q) => p.name.localeCompare(q.name, 'en', { sensitivity: 'base' }))
+          .map(dealCard).join('') + '</div>';
+
+    $('#tabbody').innerHTML = h;
+    document.querySelectorAll('[data-deal]').forEach((el) => {
+      el.onclick = () => {
+        const k = el.getAttribute('data-deal');
+        OPEN[k] = !OPEN[k];
+        renderDashboard();
+      };
+    });
+  }
+
+  /* One override line can be a rate, a multiple, a count of years or a window, so the shared
+     file's raw value is formatted the same way the holder's is -- otherwise 0.12 sits beside
+     12% and reads as a third disagreement. */
+  function ovrVal(o, v) {
+    if (o.fmt === 'window') return 'years ' + v[0] + '–' + v[1];
+    const n = Number(v);
+    if (o.fmt === 'pct' && isFinite(n)) return pct(n);
+    if (o.fmt === 'mult' && isFinite(n)) return mult(n);
+    if (o.fmt === 'years' && isFinite(n)) return n + ' yrs';
+    if (o.fmt === 'num' && isFinite(n)) return String(n);
+    return esc(String(v));
+  }
+
+  /* Matches the engine's own isRealEstate(). Two copies of a regular expression is a real
+     risk, so E31 asserts they agree on every asset class any deal file actually uses. */
+  const RE_KIND = /real\s*estate|property|multifamily|self.?storage|hospitality/i;
+
+  function dealCard(x) {
+    const open = !!OPEN[x.name];
+    const d = x.deal;
+    const e = expectedOf(x);
+    const ovr = x.overrides || [];
+    const row = (l, v, cls) => '<div style="display:flex;justify-content:space-between;gap:16px;'
+      + 'padding:5px 0;font-size:13px"><span style="color:var(--muted)">' + l + '</span>'
+      + '<span class="' + (cls || '') + '" style="font-family:var(--mono);text-align:right">'
+      + v + '</span></div>';
+    let h = '<div style="border:1px solid var(--rule);border-radius:9px;margin-bottom:9px;overflow:hidden">'
+      + '<div data-deal="' + esc(x.name) + '" style="display:flex;align-items:center;gap:12px;'
+      + 'padding:12px 14px;cursor:pointer;background:' + (open ? '#F4F7FB' : '#fff') + '">'
+      + '<span style="width:9px;height:9px;border-radius:50%;background:'
+      + clsColour(x.kind === 'venture' ? 'Venture' : x.cls) + '"></span>'
+      + '<b style="flex:1">' + esc(x.name) + '</b>'
+      + (d ? '<span style="font-size:10px;letter-spacing:.05em;color:var(--muted);border:1px solid '
+             + 'var(--rule);border-radius:999px;padding:2px 8px">SHARED</span>' : '')
+      + (ovr.length ? '<span style="font-size:10px;letter-spacing:.05em;color:#9A5B14;border:1px solid '
+             + '#E6C79A;background:#FDF6EE;border-radius:999px;padding:2px 8px">YOURS &times; '
+             + ovr.length + '</span>' : '')
+      + '<span style="font-family:var(--mono);font-size:13px">' + money(x.commitment) + '</span>'
+      + '<span style="font-family:var(--mono);font-size:12px;color:var(--muted);width:92px;'
+      + 'text-align:right">' + payWindow(x) + '</span>'
+      + '<span style="color:var(--muted)">' + (open ? '−' : '+') + '</span></div>';
+    if (open) {
+      h += '<div style="padding:4px 16px 16px;border-top:1px solid var(--rule)">'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 28px">'
+        + '<div><div class="note" style="margin:10px 0 4px"><b>Your position</b></div>'
+        + row('Commitment', money(x.commitment))
+        + row('Funded to date', money(x.funded))
+        + row('Still callable', x.uncalled ? money(x.uncalled) : DASH, x.uncalled ? 'neg' : 'z')
+        + row('Year funded', x.fy)
+        + '</div><div><div class="note" style="margin:10px 0 4px"><b>What the model makes of it</b></div>'
+        + row('Exits at', mult(x.exitMult) + (x.coupon ? ' residual' : '')
+          + (x.moicAssumed ? ' <span style="color:#9A5B14;font-size:10px">assumed</span>' : ''))
+        + row('Expected exit', money(e.exit) + '  ' + mult(e.mult))
+        + (e.pref > 0 ? row('Preferred over the hold', money(e.pref)
+            + (e.prefScheduled > e.pref + 1
+              ? ' <span style="color:var(--muted);font-size:11px">of '
+                + money(e.prefScheduled) + ' scheduled</span>' : ''), 'pos') : '')
+        + row('Pays out', x.spread ? payWindow(x) : payWindow(x) + ' (single date)')
+        + '</div></div>';
+      if (d) {
+        const t = d.terms || {};
+        const bits = [];
+        if (t.couponPct != null) bits.push(['Preferred', pct(t.couponPct)]);
+        if (t.holdYears) bits.push(['Hold', t.holdYears + ' yrs']);
+        /* 2026-10-31: every value from a deal file is escaped (a file is repository content
+           today, but a member-supplied deal file must not be able to inject markup), and a
+           numeric kicker prints as a percent rather than as a bare "0.15" (UX-20). */
+        if (t.equityKicker != null) bits.push(['Equity kicker', Number.isFinite(Number(t.equityKicker))
+          ? pct(Number(t.equityKicker)) : esc(String(t.equityKicker))]);
+        if (t.sponsorMoic) bits.push(['Sponsor MOIC', mult(t.sponsorMoic)]);
+        /* A RATE FIELD HOLDING PROSE PRINTS "NaN%", and a reader who sees that quite
+           reasonably stops trusting the numbers beside it. Philo's mgmtFee was a sentence.
+           Fixed in the file too; this is the guard for the next one. */
+        if (t.mgmtFee != null) {
+          bits.push(['Mgmt fee', Number.isFinite(Number(t.mgmtFee))
+            ? pct(t.mgmtFee) : esc(String(t.mgmtFee))]);
+        }
+        if (t.carry) bits.push(['Carry', esc(String(t.carry))]);
+        if (t.ubtiDrag != null) bits.push(['UBTI drag', pct(t.ubtiDrag)]);
+        /* LEVERAGE IS THE INPUT THAT MOST CHANGES A PROPERTY DEAL'S DOWNSIDE, and the model
+           has to use SOME number for it. When the sponsor never stated one, saying so is the
+           difference between an assumption and a quiet invention -- the same reason an
+           assumed sponsor MOIC is badged rather than printed plain. */
+        if (RE_KIND.test(String(d.assetClass || ''))) {
+          /* terms.ltv is accepted as an alias for terms.ltvPct, as in Engine.applyDealFile. */
+          const ltvT = t.ltvPct != null ? t.ltvPct : t.ltv;
+          bits.push(['LTV', ltvT != null ? pct(Engine.pctField(ltvT, 'loan to value', 'ltv', null))
+            : pct(Engine.CFG.reLtv.ref) + ' assumed']);
+        }
+        /* A deal file whose terms are being checked says so ON THE CARD. A shared file
+           that is quietly wrong is worse than no shared file, because it looks
+           authoritative and nobody re-reads their own documents. */
+        if (d.provisional) {
+          h += '<div style="margin:14px 0 4px;padding:11px 13px;border-radius:8px;'
+            + 'background:#FDF3EC;border:1px solid #F0D3BE;font-size:13px;line-height:1.6;'
+            + 'color:#7A3A15"><b>These shared terms are being checked.</b> '
+            + esc(d.provisionalNote || '') + '</div>';
+        }
+        h += '<div class="note" style="margin:16px 0 6px"><b>' + esc(d.sponsor) + '</b> · '
+          + esc(d.vehicle) + ' · ' + esc(d.subStrategy || d.assetClass) + '</div>'
+          + '<div class="row" style="margin-bottom:8px">'
+          + bits.map(([k, v]) => '<span style="font-size:12px;color:var(--muted)">' + k
+              + ' <b style="color:var(--ink);font-family:var(--mono)">' + v + '</b></span>').join('')
+          + '</div>';
+
+        /* NOT EVERY TERM IS THE SAME FOR EVERY HOLDER.
+           Eephus pays 8% to Class A-1/A-2 and 6% to A-4. The file carries 6%, because that
+           is the author's class -- so the shared file was quietly handing everyone the
+           LOWEST tier and understating a third of the income for anyone above it. The
+           tiering was written down in the file all along and nothing put it on screen,
+           which is the same failure as a stale override: the information existed and the
+           reader could not see it. */
+        /* RESOLVED reads calmly; UNRESOLVED keeps the warning.
+           Telling someone to go and work out their own share class is the tool asking the
+           reader to do its job. Where the breakpoints are documented by ticket size it now
+           picks the band from the commitment and says which one. Where they are not -- the
+           documents give Eephus's rate PER CLASS but never say what sets the class -- it
+           says so, because inventing a breakpoint is worse than admitting there is one. */
+        if (x.tier) {
+          const tt = x.tier.terms || {};
+          const detail = [
+            tt.couponPct != null ? pct(tt.couponPct) + ' preferred' : null,
+            tt.mgmtFee != null ? pct(tt.mgmtFee) + ' fee' : null,
+            tt.carry ? tt.carry + ' carry' : null,
+          ].filter(Boolean).join(' · ');
+          h += '<div style="margin:2px 0 10px;padding:10px 12px;border-radius:8px;'
+            + 'background:#F1F7F3;border:1px solid #CADFD2;font-size:12.5px;line-height:1.6;'
+            + 'color:#2E6B52"><b>Your commitment puts you in ' + esc(x.tier.label) + '.</b>'
+            + (detail ? ' ' + esc(detail) + '.' : '')
+            + ' <span style="color:var(--muted)">Set from the ' + money(x.commitment)
+            + ' you committed, not from whoever wrote the shared file.</span></div>';
+        } else if (d.variesByHolder && d.variesByHolder.length) {
+          h += '<div style="margin:2px 0 10px;padding:10px 12px;border-radius:8px;'
+            + 'background:#FDF6EE;border:1px solid #E6C79A;font-size:12.5px;line-height:1.6;'
+            + 'color:#7A4A15"><b>These terms are not the same for every investor.</b> '
+            + esc(d.variesNote || '') + '</div>';
+        }
+
+        /* The footnotes the terms carry: which class, what the hold really means, whether
+           the preferred return compounds. Recorded since the files were written and never displayed. */
+        const notes = Object.keys(t).filter((k) => /Note$/.test(k) && t[k]);
+        if (notes.length) {
+          /* Every Note key the shipped deal files carry has a plain label (UX-20: the card
+             printed raw keys such as "sponsorMoic:" and "minimum:"). A key not listed here is
+             turned from camelCase into words rather than shown as code. */
+          const label = { couponNote: 'Preferred', holdNote: 'Hold', moicNote: 'Sponsor MOIC',
+            feeNote: 'Fees', carryNote: 'Carry', sponsorMoicNote: 'Sponsor’s target',
+            mgmtFeeNote: 'Management fee', minimumNote: 'Minimum investment',
+            instrumentNote: 'Instrument', entryMultipleNote: 'Entry multiple',
+            qsbsNote: 'QSBS (small business stock tax break)', uncalledYieldNote: 'Yield on uncalled money',
+            callPctPerYearNote: 'Call pace', valuationNote: 'Valuation' };
+          const words = (k) => {
+            const w = k.replace(/Note$/, '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+            return w.charAt(0).toUpperCase() + w.slice(1);
+          };
+          h += '<div style="margin-bottom:8px">'
+            + notes.map((k) => '<div class="note" style="margin:2px 0"><b>'
+                + esc(label[k] || words(k)) + ':</b> ' + esc(t[k]) + '</div>').join('')
+            + '</div>';
+        }
+
+        h += dealProse(d);
+
+        /* WHAT THE FUND ACTUALLY HOLDS.
+           A fund card that lists only terms tells you the shape of the wrapper and nothing
+           about what is inside it. Where a sponsor has published its portfolio, it goes here
+           -- names and a line each, never their financials. */
+        const H = d.holdings;
+        if (H && H.companies && H.companies.length) {
+          h += '<div class="note" style="margin:16px 0 6px"><b>What it holds</b> · '
+            + H.companies.length + ' companies'
+            + (H.asOf ? ' as at ' + esc(H.asOf) : '') + '</div>'
+            + (H.note ? '<p class="note" style="margin:0 0 8px">' + esc(H.note) + '</p>' : '')
+            + H.companies.map((c) => '<div style="padding:6px 0;border-top:1px solid var(--rule);'
+                + 'font-size:12.5px"><b>' + esc(c.name) + '</b>'
+                + (c.stage ? ' <span style="color:var(--muted);font-size:11px">' + esc(c.stage)
+                    + (c.category ? ' · ' + esc(c.category) : '') + '</span>' : '')
+                + '<div class="note" style="margin:2px 0 0">' + esc(c.what || '') + '</div></div>').join('')
+            + (H.source ? '<p class="note" style="margin-top:8px;color:var(--muted)">Source: '
+                + esc(H.source) + '</p>' : '');
+        }
+        if (d.liquidity && d.liquidity.source) {
+          h += '<p class="note" style="margin-top:6px">Pays out over years '
+            + esc(d.liquidity.fromYear) + ' to ' + esc(d.liquidity.toYear) + ' from funding. '
+            + '<span style="color:var(--muted)">' + esc(d.liquidity.source) + '.</span></p>';
+        }
+        /* WHERE THE SHEET AND THE FILE DISAGREE.
+           Your value is the one the model ran on, and that does not change. What changes is
+           that the disagreement is now visible: a deliberate haircut and a figure that went
+           stale when the sponsor's terms were corrected used to look exactly alike, which is
+           how a 5-to-8 window sat under a deal whose documents said 6 to 8 for a day. */
+        if (ovr.length) {
+          h += '<div style="margin:16px 0 4px;border:1px solid #E6C79A;background:#FDF6EE;'
+            + 'border-radius:8px;padding:11px 13px">'
+            + '<div style="font-size:13px;font-weight:700;color:#7A4A15;margin-bottom:2px">'
+            + 'You typed over the shared file on ' + ovr.length
+            + (ovr.length === 1 ? ' field' : ' fields') + '</div>'
+            + '<p class="note" style="margin:0 0 8px;color:#7A4A15">Your figure is what ran. '
+            + 'This is here so a number you chose on purpose does not look the same as one that '
+            + 'went stale after the sponsor terms were corrected.</p>'
+            + ovr.map((o) => '<div style="display:flex;justify-content:space-between;gap:16px;'
+                + 'padding:4px 0;font-size:13px;border-top:1px solid #F0DFC9">'
+                + '<span style="color:#7A4A15">' + esc(o.label) + '</span>'
+                + '<span style="font-family:var(--mono);text-align:right;color:#7A4A15">'
+                + '<b>' + ovrVal(o, o.yours) + '</b>'
+                + '<span style="color:var(--muted)"> &nbsp;shared file: ' + ovrVal(o, o.shared)
+                + '</span></span></div>').join('')
+            + '</div>';
+        }
+      }
+      /* A multiple nobody supplied must not look like one somebody did. */
+      if (x.moicAssumed) {
+        h += '<div style="margin:12px 0 4px;padding:10px 12px;border-radius:8px;'
+          + 'background:#FDF6EE;border:1px solid #E6C79A;font-size:12.5px;line-height:1.6;'
+          + 'color:#7A4A15"><b>Nobody has given this deal a multiple, so the tool assumed one.</b> '
+          + 'It is using ' + mult(x.moic) + ', which is this tool\u2019s convention for a venture '
+          + 'deal with nothing to exit on. It is not the sponsor\u2019s projection and not a figure '
+          + 'anyone quoted. Put your own number in the Sponsor MOIC column and it will be used '
+          + 'instead.</div>';
+      }
+      if (x.thesis) {
+        h += '<div class="note" style="margin:16px 0 4px"><b>Why you did it</b></div>'
+          + '<p class="note">' + esc(x.thesis) + '</p>';
+      }
+      h += '</div>';
+    }
+    return h + '</div>';
+  }
+
+  function renderBackground() {
+    const rules = [
+      ['Commitment, not funded', 'Exit proceeds run off the full commitment, because the whole '
+        + 'commitment is called long before any exit lands. Using funded-to-date understated '
+        + 'one real portfolio by 48%.'],
+      ['A preferred return is already inside the multiple', 'A sponsor MOIC is total distributions over '
+        + 'invested capital, so a preferred return paid along the way is part of it. Showing the '
+        + 'preferred return separately AND exiting at the full multiple counts that cash twice.'],
+      ['A fund is not one big deal', 'A fund of 20 or more companies cannot return zero the way '
+        + 'one company can, and it does not pay out on a single date. It gets its own outcome '
+        + 'table and sells down over a window.'],
+      ['The year-by-year column does not add up', 'Each year there is ranked on its own, so a '
+        + 'good 2030 and a good 2034 come from different futures. Adding them builds a future '
+        + 'nobody had, and on a real portfolio that overstated the total by 69%. The by-the-end-of-year '
+        + 'table is the one you can read down.'],
+      ['Contractual and speculative never sum', 'A preferred return is promised; an exit is hoped for. They '
+        + 'appear on different panels and never inside the same total.'],
+    ];
+    /* UX-02 / UX-08: the tab names here are read from the tab bar's own labels (renamed by
+       window.APP_TAB_LABELS), so this page can no longer describe tabs by names the bar does
+       not show. Before, it listed "Private Deal Dashboard" and "Performance & Returns" in an
+       app whose bar says Deals and Returns. */
+    const tabName = tabLabel;
+    $('#tabbody').innerHTML = '<div class="card"><h2>What this does</h2>'
+      + '<p class="note">You type what you committed to; this works out when the money might '
+      + 'come back, and how much. For your private deals, three tabs do the work, each answering '
+      + 'one question. ' + tabName('about') + ' is this page, and ' + tabName('universe')
+      + ' lists every deal the tool knows:</p>'
+      + '<div class="glos"><div class="t">' + tabName('dash') + '</div><div class="d">'
+      + '<b>What do I hold?</b> Totals, the mix, every position and a card per deal. Mostly '
+      + 'bookkeeping: these are facts you typed.</div></div>'
+      + '<div class="glos"><div class="t">' + tabName('outlook') + '</div><div class="d">'
+      + '<b>When does the money move?</b> Calls going out, income coming in, and the year each '
+      + 'position is due. This is a projection, not a schedule.</div></div>'
+      + '<div class="glos"><div class="t">' + tabName('perf') + '</div><div class="d">'
+      + '<b>How much comes back?</b> The range of outcomes and what they work out to as a '
+      + 'return. The widest numbers in the app, and the least certain.</div></div>'
+      + '<p class="note" style="margin-top:14px">Everything runs in your browser. Your tracker is '
+      + 'read in the page and never uploaded. No account, no analytics. Once the page has loaded '
+      + 'you can turn off your wifi and it still works.</p></div>'
+      + '<div class="card"><h2>The numbers this tool invents, and why</h2>'
+      + '<p class="note">Your commitment, your funding date and the sponsor\u2019s terms come '
+      + 'from you and from the shared deal files. Everything below is the tool\u2019s own '
+      + 'judgement. None of it is a finding, all of it is arguable, and it is written out here '
+      + 'so you can disagree with a specific number rather than with the whole thing.</p>'
+
+      + '<div class="glos"><div class="t">How one deal turns out</div><div class="d">'
+      + 'A single venture deal is given a <b>30% chance of returning nothing</b>, a 30% chance '
+      + 'of handing back roughly what you put in, a 30% chance of a modest result around 1.65x, '
+      + 'and a <b>10% chance of reaching the sponsor\u2019s own number</b>. That last point is '
+      + 'the one people miss: a sponsor\u2019s multiple is not the expected case here, it is '
+      + 'the best one outcome in ten. A fund holding ' + Engine.CFG.fundMinDeals + ' or more companies gets a different '
+      + 'table entirely, because a fund returning zero would need every company in it to fail '
+      + 'at once, and that does not happen. An income sleeve gets a tighter table again: 5% '
+      + 'written off, and most outcomes clustered near plan.</div></div>'
+
+      + '<div class="glos"><div class="t">How much of a preferred return actually arrives</div><div class="d">'
+      + 'A preferred return is contractual but not guaranteed, and a sponsor who is not earning '
+      + 'can suspend one. So the tool pays <b>about a quarter</b> of the scheduled amount where '
+      + 'the position writes off its equity, <b>about 70%</b> where it lands well below plan, '
+      + '<b>about 90%</b> just below plan, and all of it on plan. '
+      + 'The important part is that this is tied to the <b>same draw</b> as the exit rather '
+      + 'than rolled separately, because the fund that hands back less than plan is the same fund '
+      + 'that stopped paying. Rolling them independently would let a deal lose everything while '
+      + 'still paying seven years of coupon, which is not how it goes.</div></div>'
+
+      + '<div class="glos"><div class="t">When the money shows up</div><div class="d">'
+      + 'Exits slip more often than they come early, so timing is skewed late: <b>20%</b> three '
+      + 'years earlier than expected, <b>50%</b> on time, <b>25%</b> two years late and <b>5%</b> '
+      + 'four years late. An exit is never placed before the current year, because a position you '
+      + 'still hold has not exited yet. '
+      + 'A fund does not exit on a date at all, it sells down over several years, so its '
+      + 'proceeds are spread across a window with the largest payment usually last. Staging '
+      + 'only moves money between years. It never creates or destroys any, and the '
+      + 'lifetime totals come out the same either way.</div></div>'
+
+      + '<div class="glos"><div class="t">Capital calls</div><div class="d">'
+      + 'Whatever you have committed but not yet funded is assumed to be called over about '
+      + '<b>three years</b>, starting the year after you funded. Because your uncalled figure is '
+      + 'what is left today, none of it is placed in time already gone: a spread that would '
+      + 'have started earlier starts now. A <b>Next call date</b> and <b>Next call amount</b> '
+      + 'in your tracker replace the guess, and a fund whose file records the pace it calls at '
+      + 'runs off at that pace. Exit proceeds are measured '
+      + 'against your <b>full commitment</b>, not against what you have paid in so far, because '
+      + 'by the time a deal exits the whole commitment will have been called.</div></div>'
+
+      + '<div class="glos"><div class="t">Where a sponsor gave no multiple</div><div class="d">'
+      + 'The tool falls back to <b>5.0x</b> for a venture position, and says so on the card. '
+      + '5.0x is not a neutral number, it is a strong claim, so it is labelled as the '
+      + 'tool\u2019s convention rather than passed off as anybody\u2019s projection.</div></div>'
+
+      + '<div class="glos"><div class="t">What it runs on</div><div class="d">'
+      + '<b>' + Engine.CFG.paths.toLocaleString('en-US') + ' simulated futures</b>, from a fixed starting seed, so the same portfolio '
+      + 'always produces the same answer. If a number moves, something moved it.</div></div>'
+      + '</div>'
+
+      + '<div class="card"><h2>The rules it enforces</h2>'
+      + rules.map(([t, v]) => '<div class="glos"><div class="t">' + t + '</div><div class="d">'
+          + v + '</div></div>').join('')
+      + '</div>'
+      + '<div class="card"><h2>What it cannot tell you</h2>'
+      + '<p class="note"><b>Whether any of this is a good investment.</b> It takes your deals as '
+      + 'given and says when the money might arrive. It has no view on whether you should have '
+      + 'bought them.</p>'
+      + '<p class="note"><b>What anything is worth today.</b> Private marks are stale by '
+      + 'construction and usually flattering. Current value is whatever the last sponsor '
+      + 'statement said.</p>'
+      + '<p class="note"><b>Anything precise beyond about seven years.</b> The range that far out '
+      + 'is too wide for a single figure to mean much.</p>'
+      + '<p class="note"><b>What happens when everything goes wrong at once.</b> The model draws '
+      + 'each deal independently. In a real downturn they move together, which makes any '
+      + 'diversification benefit here look better than it probably is. This is now the single '
+      + 'most optimistic thing the model does.</p>'
+      + '<p class="note"><b>The difference your fee class makes.</b> Management fees and carry '
+      + 'are shown on a deal card but are <b>not modelled</b>. The model runs on the sponsor&rsquo;s '
+      + 'quoted multiple, which is already stated net to the investor, so applying fees again '
+      + 'would count them twice. The catch is that a sponsor quotes ONE base case, and several '
+      + 'GC deals charge different fees at different ticket sizes: Asilia drops from 1.3% and '
+      + '30% carry to 1.2% and 20% at $400k. If you are in the cheaper class you are keeping '
+      + 'more of the same gross return than this shows. The fix is to ask the sponsor for your '
+      + 'class&rsquo;s base case and type that multiple into your tracker, because what you type '
+      + 'wins.</p>'
+      + '<p class="note">Not advice. The outcome probabilities are assumptions and are meant to '
+      + 'be argued with.</p></div>'
+      /* "Reading these tables" explains the percentile tables on the other two tabs. It used
+         to sit at the foot of a ten-panel scroll, which is the least likely place a confused
+         reader would look. */
+      + glossary(null);
+  }
+
+  function outlookPanels() {
+    /* v1.42: a sleeve this book does not hold has nothing to show, and the old early return
+       painted only "No positions in this view." with no sleeve buttons, so the reader had no
+       way back. Fall back to the whole portfolio instead. */
+    if (!subset(MODE).length) MODE = 'all';
+    const book = subset(MODE);
+    const st = Engine.simulate(book, { paths: Engine.CFG.paths, irr: true });
+    if (!st) { $('#tabbody').innerHTML = '<div class="card">No positions in this view.</div>'; return null; }
+    const T = st.totals;
+
+    /* ONE path count for every panel on the tab. The sleeve comparison ran on 3,000 futures
+       while the lifetime table two cards below ran on 6,000, so the same sleeve printed two
+       different medians on one page. */
+    const vSt = Engine.simulate(subset('venture'), { paths: Engine.CFG.paths });
+    const iSt = Engine.simulate(subset('income'), { paths: Engine.CFG.paths });
+    const aSt = Engine.simulate(subset('all'), { paths: Engine.CFG.paths });
+    const series = [];
+    if (vSt) series.push({ key: 'venture', label: 'Venture only', col: 'var(--vc)', raw: '#7B5EA7', st: vSt });
+    if (iSt) series.push({ key: 'income', label: 'Income sleeves only', col: 'var(--inc)', raw: '#B17930', st: iSt });
+    if (aSt && series.length > 1) series.push({ key: 'all', label: 'Blended portfolio', col: 'var(--all)', raw: '#2E6B52', st: aSt });
+    if (!series.some((s) => s.key === DIST)) DIST = series[series.length - 1].key;
+
+    const P = {};
+
+    P.filter = '<div class="card"><h2>Which sleeve</h2>'
+      + '<div class="row">'
+      + btn('mode', 'all', 'Blended portfolio') + btn('mode', 'venture', 'Venture only')
+      + btn('mode', 'income', 'Income sleeves only') + '</div>'
+      + '<div class="kpi">'
+      + kpi('Positions', book.length) + kpi('Committed', money(T.committed))
+      + kpi('Funded', money(T.funded)) + kpi('Still callable', money(T.uncalled), T.uncalled > 0 ? 'neg' : '')
+      + '</div></div>';
+
+    /* distribution */
+    if (series.length > 1) {
+      const active = series.find((s) => s.key === DIST);
+      P.range = '<div class="card"><h2>Outcome range by sleeve</h2>'
+        + '<p class="note">The same three sleeves, side by side. Each bar runs from a bad run '
+        + '(the 10th percentile) to a good one (the 90th), with the typical run (the '
+        + 'median) marked. Measured as a multiple on committed capital, so sleeves of '
+        + 'different sizes compare directly.</p>'
+        + rangeChart(series) + rangeRead(series) + '</div>';
+
+      P.dist = '<div class="card"><h2>Outcome distribution</h2>'
+        + '<p class="note">Where ' + Engine.CFG.paths.toLocaleString('en-US') + ' simulated futures landed, as a multiple on what you committed. '
+        + 'The percentiles above are three points on this curve; this is the whole shape. Anything '
+        + 'above ' + series[0].st.histMax.toFixed(1) + 'x sits in the last bar.</p>'
+        + '<div class="row" style="margin-top:12px">'
+        + series.map((s) => btn('dist', s.key, s.label)).join('') + '</div>'
+        + distChart(series, DIST)
+        + '<p class="note" style="margin-top:10px"><b>' + esc(active.label) + '</b> is in front, the others '
+        + 'stay as outlines to keep the comparison. Median '
+        + mult(active.st.totals.p50 / active.st.totals.committed) + ' on '
+        + money(active.st.totals.committed) + ' committed.</p></div>';
+    }
+
+    /* the positions */
+    /* year by year */
+    const yrRows = st.byYear.filter((r) => r.p90 > 0 || r.calls > 0 || r.coupon > 0);
+    P.cash = '<div class="card"><h2>Cash flow by year</h2>'
+      + '<p class="note">What lands in each year. Each year is ranked on its own, so the middle future '
+      + 'in one year is a <b>different</b> future from the middle in the next. '
+      + '<span class="warn">This table cannot be added down.</span> Stacking the good-run column gives '
+      + money(T.stackedP90) + ' against a real lifetime figure of ' + money(T.p90) + '. Use it to spot the '
+      + 'thin years; use the next panel to plan.</p>'
+      + '<p class="note">The <b>preferred return</b> column here is the typical (median) amount '
+      + 'after the chance a sponsor suspends it, so it is lower than the contractual figure in '
+      + 'the capital-calls panel above, which is what the documents promise.</p>'
+      + '<table><tr><th class="l">Year</th><th>Preferred return (typical)</th><th>Capital calls</th>'
+      + '<th>Typical year (median)</th><th>Odds of any cash</th><th>Good run (90th pct)</th></tr>'
+      + yrRows.map((r) => '<tr><td class="l b">' + r.year + '</td>'
+        + '<td class="' + (r.coupon ? 'pos' : 'z') + '">' + (r.coupon ? money(r.coupon) : DASH) + '</td>'
+        + '<td class="' + (r.calls ? 'neg' : 'z') + '">' + (r.calls ? '-' + money(r.calls) : DASH) + '</td>'
+        + '<td class="' + (r.med > 0 ? 'b' : 'z') + '">' + money(r.med) + '</td>'
+        + '<td>' + pct(r.odds) + '</td><td>' + money(r.p90) + '</td></tr>').join('')
+      + '</table></div>';
+
+    /* cumulative */
+    const cumRows = st.cum.filter((r) => r.p90 > 0);
+    const lastY = cumRows.length ? cumRows[cumRows.length - 1].year : null;
+    P.cum = '<div class="card"><h2>Cumulative cash received</h2>'
+      + '<p class="note">The same money, added up as it arrives. Every figure is a real total that a real '
+      + 'future reached, so <b>this one is safe to read down</b> and is the panel to plan against. '
+      + 'Subtracting one row from another is a rough guide rather than exact, because a different future '
+      + 'can sit in the middle each year. '
+      + (st.ties
+          ? '<b class="pos">The last row ties exactly to the totals below</b>, which is the check that both '
+            + 'panels came from one model.'
+          : '<span class="warn">TIE-OUT FAILED against the totals below. Do not trust either panel.</span>')
+      + '</p>'
+      + '<table><tr><th class="l">By end of</th><th>Bad run (10th pct)</th><th>Typical (median)</th>'
+      + '<th>Good run (90th pct)</th></tr>'
+      + cumRows.map((r) => '<tr' + (r.year === lastY ? ' class="hi"' : '') + '><td class="l b">' + r.year + '</td>'
+        + '<td>' + money(r.p10) + '</td><td class="b">' + money(r.p50) + '</td>'
+        + '<td class="pos">' + money(r.p90) + '</td></tr>').join('')
+      + '</table></div>';
+
+    P.ladder = '<div class="card"><h2>Maturity and liquidity ladder</h2>'
+      + '<p class="note">What matures when. One row per position, one block per year it pays, '
+      + 'darker where more of that position lands. A deal bought once is a single block; '
+      + '<b>a fund that sells down appears in every year of its window</b>. The gold line is the '
+      + 'preferred return, which arrives on a schedule rather than on an exit, shown after the '
+      + 'chance a sponsor suspends it so it sits on the same footing as the expected exit. <b>Hover any '
+      + 'block or line</b> for the amount.</p>'
+      + '<p class="note"><b>This one is not a range.</b> It is the schedule the deals\u2019 own '
+      + 'terms imply, so it says when a position is due, not how likely it is to pay.</p>'
+      + windowNote(book) + ladderChart(book) + whoPays(book) + '</div>';
+
+
+    /* the same rows, as a shape */
+    if (cumRows.length > 1) {
+      const raw = MODE === 'venture' ? '#7B5EA7' : MODE === 'income' ? '#B17930' : '#2E6B52';
+      const be = (key) => {
+        const hit = cumRows.find((r) => r[key] >= T.committed);
+        return hit ? hit.year : null;
+      };
+      const beMid = be('p50'), beGood = be('p90'), beBad = be('p10');
+      const says = beMid
+        ? 'The median crosses it in <b>' + beMid + '</b>'
+        : 'The median never crosses it inside the calendar';
+      const edges = beGood
+        ? ', a good run in ' + beGood + (beBad ? ' and a bad one in ' + beBad : ' and a bad run not at all')
+        : '';
+      P.cone = '<div class="card"><h2>The cone of outcomes</h2>'
+        + '<p class="note">The cumulative table, drawn. The band runs from a bad future to a good one '
+        + 'with the typical future through it, and widens over time because less is settled early. '
+        + 'The dashed line is your capital back.</p>'
+        + coneChart(cumRows, T.committed, raw)
+        + '<p class="note" style="margin-top:10px">' + says + edges + '. <b>Each future was totalled '
+        + 'before ranking</b>, so the bottom edge is one coherent bad run rather than a bad year '
+        + 'stitched to a bad year.</p></div>';
+    }
+
+    /* lifetime */
+    const line = (lbl, v, bold) => {
+      const profit = v - T.committed;
+      return '<tr><td class="l' + (bold ? ' b' : '') + '">' + lbl + '</td>'
+        + '<td class="' + (bold ? 'b' : '') + '">' + money(v) + '</td>'
+        + '<td class="' + (profit < 0 ? 'neg' : (bold ? 'b' : '')) + '">' + money(profit) + '</td>'
+        + '<td class="' + (bold ? 'b' : '') + '">' + mult(v / T.committed) + '</td></tr>';
+    };
+    P.life = '<div class="card"><h2>Lifetime returns</h2>'
+      + '<p class="note">Profit is measured against the <b>full ' + money(T.committed) + ' committed</b>, not '
+      + 'against the uncalled balance. Netting only what is left to fund ignores the ' + money(T.funded)
+      + ' already in and makes a thin result look healthy. <b>Read the median, not the average.</b> One '
+      + 'outsized winner pulls the average above what most futures deliver, and you only get one draw.'
+      + (T.coupon > 0 ? ' <b>' + money(T.coupon) + ' of the Typical row is preferred return</b> '
+        + '(rent-like payments your sponsors are contracted to make while you wait, rather '
+        + 'than money from selling anything). Your documents promise '
+        + money(T.couponScheduled) + ' of it. <b>The tool does not assume all of that arrives.</b> '
+        + 'A sponsor who is not earning can suspend a preferred return, and the fund most likely '
+        + 'to suspend one is the fund that also hands back less than plan, so the two move '
+        + 'together here rather than independently. In a bad run this portfolio collects '
+        + money(T.couponP10) + '.' : '')
+      + '</p>'
+      + '<table><tr><th class="l">Scenario</th><th>Total received</th><th>Profit</th><th>Multiple</th></tr>'
+      + line('Bad run (10th percentile)', T.p10, false)
+      + line('Typical (median)', T.p50, true)
+      + line('Average (mean)', T.mean, false)
+      + line('Good run (90th percentile)', T.p90, false)
+      + '</table></div>';
+
+    /* The rate panel sits AFTER the lifetime table now. A reader wants the dollars first
+       and the rate as the follow-up question, not the other way round. */
+    P.rate = irrCard(st, book);
+
+    P.calls = panelCalls(book);
+    return P;
+  }
+
+  /* TWO TABS, ONE FILTER. The sleeve selection drives every figure on both, so it is rendered
+     at the top of each and kept in MODE, which survives the tab switch. A filter that silently
+     reset when you moved tabs would be worse than no filter. */
+  function renderOutlook() {
+    const P = outlookPanels();
+    if (!P) return;
+    $('#tabbody').innerHTML = (P.filter || '') + (P.calls || '') + (P.cash || '')
+      + (P.cum || '') + (P.ladder || '') + (P.cone || '');
+    wire();
+  }
+
+  function renderPerf() {
+    const P = outlookPanels();
+    if (!P) return;
+    $('#tabbody').innerHTML = (P.filter || '') + (P.range || '') + (P.dist || '')
+      + (P.life || '') + (P.rate || '');
+    wire();
+  }
+
+  function btn(group, key, label) {
+    const on = (group === 'mode' ? MODE : DIST) === key;
+    return '<button data-' + group + '="' + key + '"' + (on ? ' class="on"' : '') + '>' + label + '</button>';
+  }
+  function kpi(label, val, cls) {
+    return '<div><small>' + label + '</small><span class="' + (cls || '') + '">' + val + '</span></div>';
+  }
+
+  /* THE CONE.
+     The table above is exact and unreadable at a glance: seventeen rows of three columns,
+     and the thing you actually want from it -- how fast the spread between a bad future and
+     a good one opens up -- is a shape, not a number. Drawn from the SAME cumulative rows the
+     table prints, so the two can never disagree; the band is the 10th to 90th percentile and
+     the line through it is the median. Inline SVG, so there is no chart library to load.
+
+     These are cumulative percentiles, which is the only kind that may be read down a column:
+     each simulated future is totalled first and the totals are ranked once. So the bad edge
+     is one coherent bad future, not a bad year stitched to a bad year. */
+  /* An IRR, or an honest word instead of one. The three cases that are NOT a number all
+     have to read differently: nothing invested is unanswerable, losing everything is -100%
+     and not 0%, and a return faster than the solver's bracket is a bound rather than a
+     figure. Printing 0% for any of them would be the worst error this panel could make. */
+  function rate(v) {
+    if (v == null) return '<span class="muted">n/a</span>';
+    if (v <= -0.9999) return '<span class="neg">\u2212100%</span>';
+    /* ZERO IS NOT A LOSS. A deal whose outcome is "capital returned" has an IRR of exactly
+       zero, and bisection lands a hair under it, so this printed a red -0.0% on six of one
+       member's venture positions. Reported by a member, 2026-10-02: "how can venture
+       have a negative number on a bad run? You can't lose more than you put in." Anything
+       inside half a basis point is zero, and is shown in neutral ink. */
+    if (Math.abs(v) < 0.0005) return '0.0%';
+    if (v >= 9.999) return '&gt;1000%';
+    const t = (100 * v).toFixed(1) + '%';
+    return v < 0 ? '<span class="neg">\u2212' + t.replace('-', '') + '</span>' : t;
+  }
+
+  /* v1.42: COMPUTED FROM THE BOOK ON SCREEN. This paragraph printed one portfolio's figures --
+     the venture sleeve's rate at a five-year hold, the income sleeves' rate and the multiples
+     needed to match it, all typed in as literals -- to every member, whatever they held. It
+     now re-runs this book's venture positions at a five-year hold and solves the multiples
+     from this book's income rate. */
+  function heldLonger(book, R) {
+    const vc = book.filter((b) => b.kind === 'venture');
+    const inc = R.byClass.income && R.byClass.income.p50;
+    if (!vc.length || inc == null) return '';
+    const holds = vc.map((b) => b.hold);
+    const lo = Math.min.apply(null, holds), hi = Math.max.apply(null, holds);
+    const short = vc.map((b) => Object.assign({}, b, { hold: 5, likely: b.fy + 5 }));
+    const S = Engine.simulate(short, { paths: Engine.CFG.paths, irr: true });
+    const sv = S && S.irr && S.irr.byClass.venture;
+    const now = R.byClass.venture;
+    let t = 'But dividing by more years is a real hurdle. ';
+    if (sv && lo !== 5) {
+      t += 'In this portfolio, holding the venture positions for five years instead of their '
+        + 'actual ' + (lo === hi ? lo : lo + ' to ' + hi) + ' would move the sleeve from '
+        + rate(now.p50) + ' to ' + rate(sv.p50) + ' a year, and its good run from '
+        + rate(now.p90) + ' to ' + rate(sv.p90) + '. That gap is the waiting.<br>';
+    }
+    t += '<b>What the waiting does not explain is the middle.</b> The typical single venture '
+      + 'deal returns <b>exactly your money back</b>, and 1.0x is 0% a year whether it '
+      + 'takes four years or twenty. Duration cannot rescue a multiple of one. Put the other '
+      + 'way round: to match the income sleeves’ ' + rate(inc) + ' a year, a venture deal '
+      + 'needs <b>' + mult(Math.pow(1 + inc, 5)) + ' over five years, or '
+      + mult(Math.pow(1 + inc, 10)) + ' over ten</b>. That is the real cost of the long hold, '
+      + 'and it is why venture has to aim so high.';
+    return t;
+  }
+
+  function irrCard(st, book) {
+    const R = st.irr;
+    if (!R) return '';
+    const band = (b) => '<td>' + rate(b.p10) + '</td><td class="b">' + rate(b.p50)
+      + '</td><td>' + rate(b.p90) + '</td>';
+
+    let h = '<div class="card"><h2>Annual rate of return</h2>';
+
+    /* Say what the reader is looking at BEFORE the table. Two caveats matter more than any
+       figure in it, and a reader who meets them afterwards has already drawn a conclusion. */
+    h += '<p class="note"><b>Every figure here is a yearly rate.</b> 12% means the money grew '
+      + 'at 12% a year, compounding, over the life of the position, not 12% in total. '
+      + 'It is worked out the standard way a sponsor or a fund does it: the rate at which the '
+      + 'deal\u2019s actual cash flows balance. <b>Nothing is assumed about what you do with '
+      + 'money once it comes back to you.</b></p>';
+    h += '<p class="note"><b>This counts cash, not marks.</b> Every dollar in these figures is '
+      + 'money actually returned, so they will read lower than an IRR a sponsor reports: '
+      + 'theirs includes what a position is currently carried at. Neither is wrong; they are '
+      + 'answering different questions. <b>And a portfolio IRR is not the average of its '
+      + 'deals\u2019.</b> IRR is not additive. Every figure below pools the underlying cash '
+      + 'flows and solves once, which is why the portfolio\u2019s number can sit well above the '
+      + 'typical deal inside it.</p>';
+
+    /* Commitment-weighted, because a $250,000 ten-year position says more about how long
+       the sleeve is tied up than a $5,000 four-year one does. */
+    const avgHold = (kind) => {
+      const rows = book.filter((b) => !kind || b.kind === kind);
+      const c = rows.reduce((a, b) => a + b.commitment, 0);
+      return c > 0 ? rows.reduce((a, b) => a + b.hold * b.commitment, 0) / c : 0;
+    };
+    h += '<table><thead><tr><th class="l">Sleeve</th><th>Typical hold</th><th>Bad run</th>'
+      + '<th>Typical</th><th>Good run</th></tr></thead><tbody>';
+    const CLS = [['income', 'Income sleeves'], ['venture', 'Venture']];
+    for (const [k, lbl] of CLS) {
+      if (R.byClass[k]) {
+        h += '<tr><td class="l">' + lbl + '</td>'
+          + '<td>' + avgHold(k).toFixed(1) + ' yrs</td>' + band(R.byClass[k]) + '</tr>';
+      }
+    }
+    h += '<tr><td class="l b">Whole portfolio</td><td class="b">' + avgHold(null).toFixed(1)
+      + ' yrs</td>' + band(R.portfolio) + '</tr>';
+    h += '</tbody></table>';
+
+    /* The diversification result, which is the most useful thing this panel produces and is
+       invisible unless the two rows are read against each other. Stated only when it is
+       actually true of the book in front of the reader. */
+    const solo = R.byDeal.filter((d) => d.kind === 'venture' && d.lossShare > 0.2);
+    if (R.byClass.venture && solo.length > 2) {
+      const med = solo.map((d) => d.p50).sort((a, b) => a - b)[Math.floor(solo.length / 2)];
+      if (R.byClass.venture.p50 > med + 0.02) {
+        /* UX-25: the old lead, "Compare the two venture rows", pointed at a row the table no
+           longer has. It now names where each figure comes from. */
+        h += '<p class="note"><b>Held together, venture does better than any one deal.</b> '
+          + 'Taken one at a time (the By deal table below), the typical single venture deal in '
+          + 'this portfolio returns ' + rate(med) + ' a year. Held together as a sleeve of '
+          + solo.length + ' (the Venture row above), the typical outcome is '
+          + rate(R.byClass.venture.p50) + '. The deals are identical in both cases; only the '
+          + 'number of them differs.</p>';
+      }
+    }
+
+    h += '<p class="note">Read this as a <b>range</b>, not a prediction. Out of 100 possible '
+      + 'futures, about 10 come out worse than the Bad run column and about 10 come out better '
+      + 'than the Good run column. The other 80 land somewhere in between.</p>';
+
+    /* The first question anyone asks of this table, and it deserves a straight answer rather
+       than being left to look like an error. Three causes, and only the third is arguable. */
+    /* v1.42: only when it is TRUE of this book. The panel asserted "the income sleeves come
+       out ahead of venture here" for any book holding both, including one where venture led. */
+    const incP = R.byClass.income && R.byClass.income.p50;
+    const vcP = R.byClass.venture && R.byClass.venture.p50;
+    if (incP != null && vcP != null && incP > vcP) {
+      h += '<details class="more"><summary>Why income sleeves beat venture on a rate</summary>'
+        + '<p class="note"><b>Why the income sleeves come out ahead of venture here, and why '
+        + 'that is not a mistake.</b> Three separate reasons:<br>'
+        + '<b>1. Money back sooner is worth more, and a yearly rate is built to say so.</b> Two '
+        + 'deals that both return 2.26x over the same seven years score 16.8% and 12.4% if one '
+        + 'pays you along the way and the other pays only at the end. Same total, same horizon. '
+        + 'Venture ties your capital up for the whole hold; an income sleeve gives it back '
+        + 'progressively and you have it to use.<br>'
+        + '<b>2. The odds are genuinely different.</b> A single venture deal is modelled with a '
+        + '30% chance of returning nothing at all and a typical outcome of just your money back. '
+        + 'An income sleeve carries a 5% chance of a write-off. That is not a thumb on the '
+        + 'scale, it is what the two asset classes do.<br>'
+        + '<b>3. A preferred return is contractual and an exit is not.</b> One is a promise a '
+        + 'sponsor has to try to keep; the other is a hope. This tool now models a preferred '
+        + 'return that can fall short (see the note under the lifetime table), but '
+        + 'even impaired it is a firmer claim than an exit multiple.<br>'
+        + 'The honest summary: venture is where the big outcomes live, and you can see that in '
+        + 'the Good run column of the by-deal table. It is a worse place to look for a '
+        + '<i>rate</i>, because a rate punishes waiting.</p></details>';
+
+      /* The follow-up question, which is a good one: is venture only behind because it is
+         held longer? Partly. The Typical hold column is there so the reader can see the
+         gap, and this says how much of the difference it accounts for. */
+      h += '<details class="more"><summary>Is venture only behind because it is held longer?</summary>'
+        + '<p class="note"><b>Is venture only behind because it is held longer?</b> Partly, '
+        + 'and the Typical hold column above is there so you can see the gap. <b>A yearly rate '
+        + 'already divides by the years</b>. That is what makes a four-year deal and a '
+        + 'ten-year deal comparable at all, so there is nothing further to adjust for. '
+        + heldLonger(book, R) + '</p></details>';
+    }
+
+    h += '<h3>By deal</h3>';
+    h += '<details class="more"><summary>What each of the three columns is asking</summary>'
+      + '<p class="note"><b>Three columns, three different questions.</b><br>'
+      + '<b>Sponsor case</b> is their own multiple turned into a yearly rate. For example, 4.3x '
+      + 'over four years is 44% a year, because 4.3x IS 44% compounded four times. It is what '
+      + 'the sponsor is claiming, not a prediction.<br>'
+      + '<b>Typical</b> is what this tool expects once the chance of failure is counted. For a '
+      + 'single deal the gap is usually huge, because a sponsor\u2019s number only happens in '
+      + 'the best one outcome in ten.<br>'
+      + '<b>Chance of losing it all</b> is the odds, not an amount. 31% means that in 31 of '
+      + 'every 100 futures that deal pays back nothing at all. It is a positive number because '
+      + 'it counts how often, not how much.</p></details>';
+    /* HER ORDER, NOT MINE. This sorted by sponsor case descending and threw away the order
+       she typed, which split her two Asilia positions and her two Plan A rows apart. Reported
+       by a member, 2026-10-02: "It makes it harder to compare. Is there anyway to
+       control in what order the deals are listed?" There was not. Tracker order is now the
+       default, because it is the one ordering the holder controls and the only one that keeps
+       two rows of the same deal together. */
+    h += '<div class="row" style="margin:10px 0 2px;align-items:center;gap:8px">'
+      + '<span class="note" style="margin:0">Order</span>'
+      + ['tracker', 'Your tracker', 'sponsor', 'Sponsor case', 'typical', 'Typical', 'size',
+         'Commitment'].reduce((a, v, i, arr) => (i % 2 ? a : a.concat([[v, arr[i + 1]]])), [])
+        .map(([k, lbl]) => '<button class="tab' + (DEALSORT === k ? ' on' : '')
+          + '" data-dsort="' + k + '" style="font-size:12px;padding:3px 9px">' + lbl
+          + '</button>').join('')
+      + '</div>';
+    h += '<table><thead><tr><th class="l">Deal</th><th>Hold</th><th>Sponsor MOIC</th>'
+      + '<th>Sponsor case</th><th>Typical</th><th>Good run</th>'
+      + '<th>Chance of losing it all</th></tr></thead><tbody>';
+    /* WHICH DEALS COULD NOT BE SOLVED, and how often. Reported by a member on
+       2026-10-01, who read ">1000%" against ACFE as a return rather than as the solver's
+       ceiling, and quite reasonably concluded the fund had an extraordinary upside with no
+       downside. Replacing it with a bare "n/a" would take the number away and explain
+       nothing, so the deals involved are named and the reason is given. */
+    const unsolved = [];
+    const SORTS = {
+      tracker: null,          // as typed; byDeal already arrives in the order of the sheet
+      sponsor: (a, b) => (b.sponsorCase || -9) - (a.sponsorCase || -9),
+      typical: (a, b) => (b.p50 == null ? -9 : b.p50) - (a.p50 == null ? -9 : a.p50),
+      size: (a, b) => (b.commitment || 0) - (a.commitment || 0),
+    };
+    const ordered = R.byDeal.slice();
+    if (SORTS[DEALSORT]) ordered.sort(SORTS[DEALSORT]);
+    for (const d of ordered) {
+      const f = d.flags || {};
+      /* 'loan-shaped' (engine, 2026-10-31): money came back before money went in and nothing
+         came back after. Same explanation as multi-sign, so it joins the same footnote. */
+      const bad = (f['above-bracket'] || 0) + (f['multi-sign'] || 0) + (f['loan-shaped'] || 0);
+      const share = d.paths ? bad / d.paths : 0;
+      if (bad > 0) unsolved.push({ name: d.name, share });
+      h += '<tr><td class="l">' + esc(d.name)
+        + (bad > 0 ? ' <span class="muted" title="A single rate of return does not describe '
+            + 'this position">\u2020</span>' : '')
+        + '</td>'
+        + '<td>' + d.hold + ' yrs</td>'
+        + '<td>' + mult(d.sponsorMoic) + '</td>'
+        + '<td>' + rate(d.sponsorCase) + '</td>'
+        + '<td class="b">' + rate(d.p50) + '</td>'
+        + '<td>' + rate(d.p90) + '</td>'
+        + '<td>' + (d.lossShare > 0.005 ? Math.round(100 * d.lossShare) + '%'
+          : '<span class="muted">' + DASH + '</span>') + '</td></tr>';
+    }
+    h += '</tbody></table>';
+
+    if (unsolved.length) {
+      h += '<p class="note" style="margin-top:10px">\u2020 <b>A rate of return does not '
+        + 'describe ' + (unsolved.length === 1 ? 'this position' : 'these positions') + '.</b> '
+        + unsolved.map((u) => esc(u.name) + ' (' + Math.round(u.share * 100) + '% of runs)')
+            .join(', ') + '. When most of a commitment is still uncalled, the preferred '
+        + 'return starts arriving while the money is still in your account, so cash comes '
+        + 'back before the rest of it goes out. There is no single annual rate that fits '
+        + 'that shape: mathematically there can be several, or none inside any '
+        + 'sensible range. <b>Use the multiple on capital instead</b>, on the chart above: '
+        + 'it is unaffected, and for a part-funded position it is the more honest measure '
+        + 'anyway, because a high rate on money you have not sent yet is not a return you '
+        + 'can spend. This resolves itself as the commitment gets called.</p>';
+    }
+
+    /* The paper track. Shown only when the holder has actually marked something up, and
+       separated from everything above by saying plainly that it is not in any of it. */
+    const P = R.paper;
+    if (P && P.marked > 0) {
+      h += '<h3>What you believe it is worth now</h3>';
+      h += '<p class="note"><b>None of this is in any figure above, and none of it is cash.</b> '
+        + 'You have marked up ' + P.marked + ' of ' + P.positions + ' position'
+        + (P.positions === 1 ? '' : 's') + '. A markup records a valuation you have been told '
+        + 'about; it is not a liquidity event, it cannot be spent, and a private mark is set by '
+        + 'the person holding the asset and is rarely revised downward. It is here because '
+        + 'waiting five to seven years with no signal at all is worse.</p>';
+      h += '<table><tbody>'
+        + '<tr><td class="l">Cost basis, funded to date</td><td>' + money(P.cost) + '</td></tr>'
+        + '<tr><td class="l">Marked-up value</td><td>' + money(P.nav) + '</td></tr>'
+        + '<tr><td class="l b">Paper gain</td><td class="' + (P.gain < 0 ? 'neg' : 'b') + '">'
+        + money(P.gain) + '</td></tr>'
+        + '<tr><td class="l">On paper</td><td>' + mult(P.multiple) + '</td></tr>'
+        + '</tbody></table>';
+    }
+
+    h += '</div>';
+    return h;
+  }
+
+  /* THE THREE BOOKS SIDE BY SIDE. One bar each, running from a bad run to a good one,
+     with the typical marked. The distribution chart answers "what shape is this book";
+     this answers "which book would I rather own", which is the question people actually
+     arrive with. Multiples rather than dollars, so three sleeves of different sizes are
+     directly comparable. */
+  function rangeChart(series) {
+    if (!series || series.length < 2) return '';
+    const rows = series.map((s) => {
+      const t = s.st.totals, c = t.committed || 1;
+      return { label: s.label, raw: s.raw, committed: c,
+               lo: t.p10 / c, mid: t.p50 / c, hi: t.p90 / c };
+    });
+    const W = 880, L = 176, R = 30, T = 44, GAP = 92, B = 40;
+    const H = T + rows.length * GAP + B;
+    const iw = W - L - R;
+    const maxX = Math.max(1.15, Math.max.apply(null, rows.map((r) => r.hi)) * 1.06);
+    const X = (m) => L + iw * (m / maxX);
+
+    let g = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block" '
+      + 'role="img" aria-label="Bad run to good run, for each sleeve, as a multiple on capital committed">';
+
+    /* gridlines every half multiple */
+    for (let m = 0.5; m <= maxX; m += 0.5) {
+      const gx = X(m);
+      g += '<line x1="' + gx.toFixed(1) + '" y1="' + (T - 14) + '" x2="' + gx.toFixed(1)
+        + '" y2="' + (T + rows.length * GAP - 34) + '" stroke="#EDF1F6"/>'
+        + '<text x="' + gx.toFixed(1) + '" y="' + (H - 16) + '" text-anchor="middle" '
+        + 'font-size="10" fill="#6B7A8C">' + m.toFixed(1) + 'x</text>';
+    }
+
+    /* break-even, drawn over the gridlines so it reads as the reference it is */
+    const bx = X(1);
+    g += '<line x1="' + bx.toFixed(1) + '" y1="' + (T - 26) + '" x2="' + bx.toFixed(1)
+      + '" y2="' + (T + rows.length * GAP - 30) + '" stroke="#141A22" stroke-width="1.5"/>'
+      + '<text x="' + bx.toFixed(1) + '" y="' + (T - 32) + '" text-anchor="middle" '
+      + 'font-size="11" font-weight="700" fill="#141A22">break even</text>';
+
+    rows.forEach((r, i) => {
+      const y = T + i * GAP;
+      const x0 = X(r.lo), x1 = X(r.hi), xm = X(r.mid);
+      g += '<text x="0" y="' + (y + 4) + '" font-size="13" font-weight="700" fill="' + r.raw
+        + '">' + esc(r.label) + '</text>'
+        + '<text x="0" y="' + (y + 21) + '" font-size="11" fill="#6B7A8C">'
+        + money(r.committed) + ' committed</text>'
+        + '<rect x="' + x0.toFixed(1) + '" y="' + (y - 15) + '" width="' + Math.max(4, x1 - x0).toFixed(1)
+        + '" height="30" rx="15" fill="' + r.raw + '" opacity="0.85"/>'
+        + '<circle cx="' + xm.toFixed(1) + '" cy="' + y + '" r="7" fill="#fff"/>'
+        /* ends above, median below, so three numbers never sit on top of each other */
+        + '<text x="' + x0.toFixed(1) + '" y="' + (y - 23) + '" text-anchor="middle" font-size="11" '
+        + 'font-weight="700" fill="' + r.raw + '">' + r.lo.toFixed(2) + 'x</text>'
+        + '<text x="' + x1.toFixed(1) + '" y="' + (y - 23) + '" text-anchor="middle" font-size="11" '
+        + 'font-weight="700" fill="' + r.raw + '">' + r.hi.toFixed(2) + 'x</text>'
+        + '<text x="' + xm.toFixed(1) + '" y="' + (y + 33) + '" text-anchor="middle" font-size="12" '
+        + 'font-weight="700" fill="' + r.raw + '">' + r.mid.toFixed(2) + 'x</text>';
+    });
+    return g + '</svg>';
+  }
+
+  /* The reading underneath, computed rather than written, so it cannot contradict the bars
+     above it when the book changes. */
+  function rangeRead(series) {
+    const by = {};
+    series.forEach((s) => {
+      const t = s.st.totals, c = t.committed || 1;
+      by[s.key] = { lo: t.p10 / c, mid: t.p50 / c, hi: t.p90 / c, label: s.label };
+    });
+    const v = by.venture, inc = by.income, all = by.all;
+    if (!v || !inc) return '';
+    const lines = [];
+    if (inc.lo >= 1 && v.lo < 1) {
+      /* UX-27: "never lose money" is not true outside the model and is not a claim a
+         financial product can make. Said as what the simulation found, at the percentile
+         it actually is. */
+      lines.push('<b>In these simulations the income sleeves held their value in a bad run and '
+        + 'venture did not.</b> A bad run (the 10th percentile) still returns '
+        + inc.lo.toFixed(2) + 'x for income and ' + v.lo.toFixed(2) + 'x for venture.');
+    }
+    if (Math.abs(v.mid - inc.mid) < 0.25) {
+      lines.push('On the typical run the two are almost level, ' + v.mid.toFixed(2) + 'x against '
+        + inc.mid.toFixed(2) + 'x, <b>so what separates them is the floor rather than the '
+        + 'middle</b>.');
+    }
+    if (v.hi > inc.hi) {
+      lines.push('Venture wins in one place, the top tenth, at ' + v.hi.toFixed(2) + 'x against '
+        + inc.hi.toFixed(2) + 'x.');
+    }
+    /* The spread is the thing the three bars are really showing, and it is easy to look at
+       them and not register how differently wide they are. */
+    const vw = v.hi - v.lo, iw = inc.hi - inc.lo;
+    if (vw > iw * 1.3) {
+      lines.push('<b>Look at the widths.</b> Venture spans ' + vw.toFixed(2)
+        + 'x from its bad run to its good one; the income sleeves span ' + iw.toFixed(2)
+        + 'x. That gap IS the risk, and it is the thing you are paid for taking.');
+    }
+    /* What blending actually bought, stated in the two numbers that moved. */
+    if (all) {
+      lines.push('<b>Holding both is not the average of the two.</b> The blend gives up '
+        + (v.hi - all.hi).toFixed(2) + 'x at the top against venture alone, and buys '
+        + (all.lo - v.lo).toFixed(2) + 'x at the bottom. <b>The floor moves far more than '
+        + 'the ceiling does</b>, which is the whole case for owning both.');
+    }
+    lines.push('<span style="color:var(--muted)">One number is missing on purpose: <b>when</b>. '
+      + 'Two sleeves returning the same multiple are not the same investment if one pays in '
+      + 'five years and the other in ten. The ladder on Liquidity Outlook shows that.</span>');
+    return lines.length ? '<p class="note" style="margin-top:12px">' + lines.join('<br>') + '</p>' : '';
+  }
+
+  /* WHAT MATURES WHEN. One row per position, one column per year, each block shaded by
+     the share of that position's proceeds landing in that year. A single-date deal is one
+     solid block; a fund that sells down is a run of lighter ones. The preferred return is
+     drawn separately, because it arrives on a schedule rather than on an exit and mixing
+     the two would be the same double-count the exit maths already avoids. */
+  function ladderRows(book) {
+    const out = [];
+    for (const b of book) {
+      const e = expectedOf(b);
+      /* v1.42: the engine's exit plan (no year already gone, past tranches renormalised), the
+         same years the simulation pays into. This kept its own copy, without either rule. */
+      const pays = {};
+      for (const [y, w] of Engine.exitPlan(b, 0)) pays[y] = (pays[y] || 0) + w;
+      /* EXPECTED preferred return, like the exit beside it. The rows stored the contractual
+         schedule, so "Expected in the year" added a probability-weighted exit to an unimpaired
+         coupon and overstated the example book's preferred income by about $36k against the
+         Dashboard's expected total. Scaled by the same outcome weighting expectedOf() uses. */
+      const pw = e.prefScheduled > 0 ? e.pref / e.prefScheduled : 0;
+      const prefYears = {};
+      if (b.coupon > 0) {
+        for (let k = 1; k <= b.hold; k++) prefYears[b.fy + k] = Engine.prefInYear(b, k) * pw;
+      }
+      const yrs = Object.keys(pays).map(Number).sort((x, y) => x - y);
+      out.push({ name: b.name, cls: b.cls, kind: b.kind, exit: e.exit, pays, evergreen: isEvergreen(b),
+                 prefYears, first: yrs[0], last: yrs[yrs.length - 1],
+                 window: yrs.length > 1 ? yrs[0] + '\u2013' + yrs[yrs.length - 1] : String(yrs[0]) });
+    }
+    return out.sort((a, b) => a.first - b.first || a.last - b.last
+      || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
+  }
+
+  /* WHICH DEALS PRODUCED THE CASH IN A GIVEN YEAR. Asked by a member against the
+     Cumulative cash received table, and it deliberately does not live there. That table is
+     percentiles: each row is whichever future happened to sit at the 10th, 50th or 90th for
+     that year, and they are different futures. No set of deals "made up" a percentile, so
+     attributing one would be inventing a fact.
+
+     The ladder's schedule is attributable, because it is deterministic -- what the terms imply
+     rather than what a draw produced. So the breakdown is built from the same ladderRows() the
+     chart above is drawn from, and it says which table it reconciles to. */
+  function whoPays(book) {
+    const rows = ladderRows(book);
+    if (!rows.length) return '';
+    const byYear = {};
+    for (const r of rows) {
+      for (const k of Object.keys(r.pays)) {
+        (byYear[k] = byYear[k] || []).push(
+          { name: r.name, cls: r.cls, kind: r.kind, exit: r.exit * r.pays[k], pref: 0 });
+      }
+      for (const k of Object.keys(r.prefYears)) {
+        const hit = (byYear[k] = byYear[k] || []).find((x) => x.name === r.name);
+        if (hit) hit.pref += r.prefYears[k];
+        else byYear[k].push({ name: r.name, cls: r.cls, kind: r.kind,
+          exit: 0, pref: r.prefYears[k] });
+      }
+    }
+    const years = Object.keys(byYear).map(Number).sort((a, b) => a - b);
+    if (!years.length) return '';
+
+    let t = '<details style="margin-top:14px"><summary style="cursor:pointer;font-weight:600;'
+      + 'font-size:13px">Which positions pay in each year</summary>'
+      + '<p class="note" style="margin-top:10px">The same schedule as the chart above, written '
+      + 'out. Both columns are <b>expected</b> amounts: the preferred return after the chance a '
+      + 'sponsor suspends it, and <b>the exit as expected proceeds</b>, every outcome weighed '
+      + 'by how likely it is. The contractual preferred schedule is in the capital-calls panel at the top of this tab. Each '
+      + 'is placed in the year the terms imply. <b>These do not add up to the percentile tables</b>, and should not: '
+      + 'a percentile is one whole future, and no set of positions makes up a percentile. This '
+      + 'is the schedule, not a range.</p>'
+      + '<table style="margin-top:8px"><tr><th class="l">Year</th><th class="l">Position</th>'
+      + '<th>Preferred</th><th>Exit</th><th>Total</th></tr>';
+    for (const y of years) {
+      const list = byYear[y].slice().sort((a, b) => (b.exit + b.pref) - (a.exit + a.pref));
+      let yt = 0;
+      list.forEach((x, i) => {
+        yt += x.exit + x.pref;
+        t += '<tr><td class="l b">' + (i === 0 ? y : '') + '</td>'
+          + '<td class="l"><span style="display:inline-block;width:8px;height:8px;'
+          + 'border-radius:50%;background:' + clsColour(x.kind === 'venture' ? 'Venture' : x.cls)
+          + ';margin-right:6px"></span>' + esc(x.name) + '</td>'
+          + '<td class="' + (x.pref > 0 ? 'pos' : 'z') + '">'
+          + (x.pref > 0 ? money(x.pref) : DASH) + '</td>'
+          + '<td class="' + (x.exit > 0 ? '' : 'z') + '">'
+          + (x.exit > 0 ? money(x.exit) : DASH) + '</td>'
+          + '<td class="b">' + money(x.exit + x.pref) + '</td></tr>';
+      });
+      if (list.length > 1) {
+        t += '<tr class="hi"><td class="l"></td><td class="l b">' + y + ' total</td>'
+          + '<td></td><td></td><td class="b">' + money(yt) + '</td></tr>';
+      }
+    }
+    return t + '</table></details>';
+  }
+
+  function ladderChart(book) {
+    const rows = ladderRows(book);
+    if (!rows.length) return '';
+    let y0 = Infinity, y1 = -Infinity;
+    for (const r of rows) {
+      for (const k of Object.keys(r.pays)) { y0 = Math.min(y0, +k); y1 = Math.max(y1, +k); }
+      for (const k of Object.keys(r.prefYears)) { y0 = Math.min(y0, +k); y1 = Math.max(y1, +k); }
+    }
+    if (!isFinite(y0)) return '';
+    const years = [];
+    for (let y = y0; y <= y1; y++) years.push(y);
+
+    const L = 208, R = 92, T = 34, RH = 26, B = 64;
+    const cw = Math.max(26, Math.min(48, 660 / years.length));
+    const W = L + years.length * cw + R;
+    const H = T + rows.length * RH + B;
+    const X = (y) => L + (y - y0) * cw;
+
+    let g = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block" '
+      + 'role="img" aria-label="Which positions pay out in which years">';
+
+    years.forEach((y, i) => {
+      if (years.length > 12 && i % 2) return;
+      g += '<text x="' + (X(y) + cw / 2).toFixed(1) + '" y="' + (T - 12) + '" text-anchor="middle" '
+        + 'font-size="10" fill="#6B7A8C">' + y + '</text>';
+    });
+
+    rows.forEach((r, i) => {
+      const yy = T + i * RH;
+      const col = clsColour(r.cls);
+      g += '<text x="0" y="' + (yy + 16) + '" font-size="11.5" fill="#141A22">'
+        + esc(r.name.length > 28 ? r.name.slice(0, 26) + '\u2026' : r.name) + '</text>';
+      if (i % 2 === 0) {
+        g += '<rect x="' + L + '" y="' + (yy + 2) + '" width="' + (years.length * cw)
+          + '" height="' + (RH - 4) + '" fill="#F7F9FC"/>';
+      }
+      for (const k of Object.keys(r.prefYears)) {
+        /* THE AMOUNT, like the blocks have. Reported by a member: "have the lines
+           show how much of a return? (the blocks already do)". The figure was already in
+           hand -- ladderRows stores prefInYear() per year -- and the rect was drawn without
+           it, so the one element on this chart that arrives on a promised schedule was the
+           one you could not read a number off. */
+        g += '<rect x="' + (X(+k) + 2).toFixed(1) + '" y="' + (yy + 16) + '" width="'
+          + (cw - 4).toFixed(1) + '" height="4" rx="2" fill="#B17930" opacity="0.55">'
+          + '<title>' + esc(r.name + '\n' + k + ': expected preferred return, about '
+          + money(r.prefYears[k])) + '</title></rect>';
+      }
+      for (const k of Object.keys(r.pays)) {
+        const share = r.pays[k];
+        g += '<rect x="' + (X(+k) + 2).toFixed(1) + '" y="' + (yy + 3) + '" width="'
+          + (cw - 4).toFixed(1) + '" height="12" rx="3" fill="' + col + '" opacity="'
+          + (0.25 + 0.7 * share).toFixed(2) + '"><title>' + esc(r.name + '\n' + k + ': '
+          + Math.round(share * 100) + '% of its exit' + (r.evergreen
+            ? ' (an evergreen fund is not sold: this is your capital coming back)' : '')
+          + ', about ' + money(r.exit * share)) + '</title></rect>';
+      }
+      g += '<text x="' + (W - R + 8) + '" y="' + (yy + 16) + '" font-size="10.5" fill="#6B7A8C">'
+        + esc(r.window) + '</text>';
+    });
+
+    /* Expected dollars landing each year, across the whole book, under the grid. */
+    const byYear = {};
+    for (const r of rows) {
+      for (const k of Object.keys(r.pays)) byYear[k] = (byYear[k] || 0) + r.exit * r.pays[k];
+      for (const k of Object.keys(r.prefYears)) byYear[k] = (byYear[k] || 0) + r.prefYears[k];
+    }
+    const peak = Math.max.apply(null, years.map((y) => byYear[y] || 0)) || 1;
+    const base = T + rows.length * RH + 38;
+    g += '<text x="0" y="' + (base - 8) + '" font-size="11" font-weight="700" fill="#141A22">'
+      + 'Expected in the year</text>';
+    years.forEach((y) => {
+      const v = byYear[y] || 0;
+      const hgt = Math.max(1, 16 * (v / peak));
+      g += '<rect x="' + (X(y) + 2).toFixed(1) + '" y="' + (base - hgt).toFixed(1) + '" width="'
+        + (cw - 4).toFixed(1) + '" height="' + hgt.toFixed(1) + '" fill="#2E6B52" opacity="0.55">'
+        + '<title>' + esc(y + ': about ' + money(v)) + '</title></rect>';
+      /* The amount ABOVE the block. A 16px bar with no axis can only say "bigger than that
+         one"; the number is the thing worth reading. A year with nothing due gets no label
+         rather than a row of $0. */
+      if (v > 0) {
+        g += '<text x="' + (X(y) + cw / 2).toFixed(1) + '" y="' + (base - hgt - 5).toFixed(1)
+          + '" text-anchor="middle" font-size="9" font-weight="600" fill="#41506B">'
+          + moneyTight(v) + '</text>';
+      }
+    });
+    return g + '</svg>';
+  }
+
+  /* THE WRITTEN PART OF A DEAL, in headed sections.
+     `sections` is an ordered [{title, body}] and the titles live in the data rather than
+     here, because the right headings differ by deal: a fund has a sponsor where a company has
+     founders, and the final section is deliberately whatever that deal turns on. A file that
+     has not been sectioned yet still renders its old `structure` block, so nothing goes blank
+     mid-migration.
+
+     NOTE WHAT IS NOT HERE: `provisional` and `source`. Those record how well sourced a card
+     is, which is a note to ourselves. A reader does not need to know which transcript a figure
+     came from, and telling them invites them to weigh the citation instead of the deal. The
+     tracking lives in drafts/PRODUCT_BACKLOG.md instead. */
+  function dealProse(d) {
+    if (d.sections && d.sections.length) {
+      return d.sections.filter((x) => x && x.body).map((x) =>
+        (x.title
+          ? '<div style="font-size:11px;color:var(--muted);margin:12px 0 3px;'
+            + 'letter-spacing:.04em;text-transform:uppercase">' + esc(x.title) + '</div>'
+          : '')
+        + '<p class="note" style="margin:0">' + esc(x.body) + '</p>').join('');
+    }
+    return d.structure ? '<p class="note" style="margin-top:10px">' + esc(d.structure) + '</p>' : '';
+  }
+
+  /* One entry in the deal list. Deliberately NOT the dashboard card: there is no holder
+     here, so no commitment, no funded amount and no override comparison. What is left is
+     the shared part, which is the part that is the same for everyone who bought it. */
+  function universeCard(d, held) {
+    const t = d.terms || {};
+    const open = !!OPEN['u:' + d.slug];
+    const bit = (l, v) => v == null || v === '' ? ''
+      : '<div style="display:flex;justify-content:space-between;gap:16px;padding:4px 0;'
+        + 'font-size:13px"><span style="color:var(--muted)">' + l + '</span>'
+        + '<span style="font-family:var(--mono);text-align:right">' + v + '</span></div>';
+
+    let h = '<div style="border:1px solid var(--rule);border-radius:9px;margin-bottom:9px;'
+      + 'overflow:hidden">'
+      + '<div data-udeal="' + esc(d.slug) + '" style="display:flex;align-items:center;gap:12px;'
+      + 'padding:12px 14px;cursor:pointer;background:' + (open ? '#F4F7FB' : '#fff') + '">'
+      + '<span style="width:9px;height:9px;border-radius:50%;background:'
+      + clsColour(d.assetClass) + ';flex:none"></span>'
+      + '<b style="flex:1">' + esc(d.name) + '</b>'
+      + (held ? '<span style="font-size:11px;color:#2E6B52;font-weight:700">in your portfolio</span>' : '')
+      + '<span style="font-size:11px;color:var(--muted)">' + esc(d.assetClass || '')
+      + (d.vehicle ? ' \u00b7 ' + esc(d.vehicle) : '') + '</span>'
+      + '<span style="color:var(--muted)">' + (open ? '\u2212' : '+') + '</span></div>';
+
+    if (open) {
+      h += '<div style="padding:4px 14px 14px">'
+        + (d.subStrategy ? '<p class="note" style="margin-top:0">' + esc(d.subStrategy) + '</p>' : '')
+        + bit('Sponsor', d.sponsor ? esc(d.sponsor) : null)
+        + bit('Sponsor MOIC', t.sponsorMoic != null ? mult(t.sponsorMoic) : null)
+        + bit('Hold', t.holdYears ? t.holdYears + ' yrs' : null)
+        + bit('Preferred return', t.couponPct ? (t.couponPct * 100).toFixed(1) + '%' : null)
+        + bit('Minimum', t.minimum ? money(t.minimum) : null)
+        + bit('Underlying deals', d.dealsInFund != null ? d.dealsInFund : null)
+        + bit('Underwriting score', d.uwScore != null ? d.uwScore + ' / 100' : null)
+        /* The reason most people will open this tab. */
+        + '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--rule)">'
+        + '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">'
+        + 'Call it any of these in your tracker</div>'
+        + '<div style="font-size:12px;font-family:var(--mono);color:#141A22">'
+        + (d.aliases || [d.name]).map((a) => esc(a)).join('  \u00b7  ') + '</div></div>'
+        + dealProse(d)
+        + (d.keyRisks && d.keyRisks.length
+            ? '<div style="margin-top:8px"><div style="font-size:11px;color:var(--muted);'
+              + 'margin-bottom:4px">What to watch</div>'
+              + '<ul style="margin:0 0 0 16px;padding:0;font-size:12.5px;color:#41506180;'
+              + 'color:var(--muted);line-height:1.6">'
+              + d.keyRisks.slice(0, 4).map((r) => '<li>' + esc(r) + '</li>').join('')
+              + '</ul></div>' : '')
+        + '</div>';
+    }
+    return h + '</div>';
+  }
+
+  async function renderUniverse() {
+    /* Put the heading up BEFORE the fetch. The list takes a moment to arrive and an empty
+       panel reads as a broken tab rather than a loading one. */
+    if (!DEALALL) {
+      $('#tabbody').innerHTML = '<div class="card"><h2>Loaded GC deals</h2>'
+        + '<p class="note">Reading the deal files\u2026</p></div>';
+    }
+    const all = await loadAllDeals();
+    const mine = {};
+    for (const b of (BOOK || [])) if (b.deal) mine[b.deal.slug || b.deal.name] = true;
+
+    let h = '<div class="card"><h2>Loaded GC deals</h2>'
+      + '<p class="note"><b>' + all.length + ' deals this tool already knows</b>, alphabetically. '
+      + 'The terms are the same for everyone who bought the deal, so each one lives in a single '
+      + 'shared file rather than being retyped by every holder. Most portfolios hold only a few '
+      + 'of them.</p>'
+      + '<p class="note"><b>If one of your positions is not filling in its terms, check the '
+      + 'spelling here.</b> Every deal lists the names it answers to. Write one of those in '
+      + 'your tracker and the terms fill in by themselves. A deal that is not on this list still '
+      + 'works; it just runs on what you type.</p>'
+      + reservedNote();
+
+    if (!all.length) {
+      return void ($('#tabbody').innerHTML = h + '<p class="note">No deal files could be '
+        + 'loaded.</p></div>');
+    }
+
+    const by = {};
+    for (const d of all) (by[d.assetClass || 'Other'] = by[d.assetClass || 'Other'] || []).push(d);
+    h += '<div class="row" style="margin-top:6px">'
+      + Object.keys(by).sort().map((k) => '<span style="display:flex;align-items:center;gap:6px;'
+        + 'font-size:12px;color:var(--muted)"><span style="width:9px;height:9px;border-radius:50%;'
+        + 'background:' + clsColour(k) + '"></span>' + esc(k) + ' (' + by[k].length + ')</span>')
+        .join('') + '</div></div>';
+
+    h += '<div class="card">'
+      + all.map((d) => universeCard(d, !!mine[d.slug])).join('') + '</div>';
+
+    $('#tabbody').innerHTML = h;
+    document.querySelectorAll('[data-udeal]').forEach((el) => {
+      el.onclick = () => {
+        const k = 'u:' + el.getAttribute('data-udeal');
+        OPEN[k] = !OPEN[k];
+        renderUniverse();
+      };
+    });
+  }
+
+  /* A refusal needs a reason. Some names resolve to nothing deliberately, because they
+     belong to a vehicle with no file here, and without saying so the tab looks like it has
+     simply never heard of a deal the member definitely owns. */
+  function reservedNote() {
+    const r = ((DEALIDX && DEALIDX.reserved) || []).slice();
+    if (!r.length) return '';
+    return '<p class="note"><b>Some names are refused on purpose.</b> '
+      + esc((DEALIDX && DEALIDX.reservedNote) || '') + ' Those names are '
+      + r.map((x) => '<i>' + esc(x) + '</i>').join(', ') + '.</p>';
+  }
+
+  function coneChart(rows, committed, raw) {
+    const W = 880, H = 320, L = 70, R = 104, T = 22, B = 48;
+    const iw = W - L - R, ih = H - T - B;
+    const y0 = rows[0].year, y1 = rows[rows.length - 1].year;
+    const span = Math.max(1, y1 - y0);
+    /* Round gridlines. Scaling the tallest value by 1.08 and quartering it gives ticks at
+       $456k and $913k, which are numbers nobody thinks in. Snap the step to 1, 2, 2.5 or 5
+       times a power of ten and let the top of the axis follow from it. */
+    const want = Math.max(rows[rows.length - 1].p90, committed) * 1.08;
+    const mag = Math.pow(10, Math.floor(Math.log10(want / 4)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((v) => v * 4 >= want) || mag * 10;
+    const ticks = Math.ceil(want / step);
+    const top = step * ticks;
+    const X = (yr) => L + iw * ((yr - y0) / span);
+    const Y = (v) => T + ih - (v / top) * ih;
+    /* A 2,500 step printed as "$3k" while the gridline sat at 2,500, which is a chart
+       lying about its own axis. One decimal where the number needs it, none where it does
+       not. */
+    const shortMoney = (v) => (
+      v >= 1e6 ? '$' + (v / 1e6).toFixed(v % 1e6 === 0 ? 0 : 1) + 'M'
+      : v >= 1e3 ? '$' + (v / 1e3).toFixed(v < 1e4 && v % 1e3 !== 0 ? 1 : 0) + 'k'
+      : '$' + Math.round(v));
+
+    let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block" '
+      + 'role="img" aria-label="Cumulative proceeds by year, 10th to 90th percentile band">';
+
+    for (let g = 0; g <= ticks; g++) {
+      const gv = step * g, gy = Y(gv);
+      s += '<line x1="' + L + '" y1="' + gy + '" x2="' + (L + iw) + '" y2="' + gy + '" stroke="#EDF1F6"/>'
+        + '<text x="' + (L - 8) + '" y="' + (gy + 3.5) + '" text-anchor="end" font-size="10" '
+        + 'fill="#6B7A8C">' + shortMoney(gv) + '</text>';
+    }
+
+    const every = span > 12 ? 2 : 1;
+    rows.forEach((r, i) => {
+      if (i % every && i !== rows.length - 1) return;
+      s += '<text x="' + X(r.year) + '" y="' + (H - 26) + '" text-anchor="middle" font-size="10" '
+        + 'fill="#6B7A8C">' + r.year + '</text>';
+    });
+
+    /* the band: out along the good edge, back along the bad one */
+    let d = 'M' + X(rows[0].year) + ' ' + Y(rows[0].p90);
+    rows.forEach((r) => { d += ' L' + X(r.year) + ' ' + Y(r.p90); });
+    for (let i = rows.length - 1; i >= 0; i--) d += ' L' + X(rows[i].year) + ' ' + Y(rows[i].p10);
+    s += '<path d="' + d + ' Z" fill="' + raw + '" opacity="0.13"/>';
+
+    const line = (key, w, op, dash) => {
+      let q = '';
+      rows.forEach((r, i) => { q += (i ? ' L' : 'M') + X(r.year) + ' ' + Y(r[key]); });
+      return '<path d="' + q + '" fill="none" stroke="' + raw + '" stroke-width="' + w
+        + '" opacity="' + op + '" stroke-linejoin="round" stroke-linecap="round"'
+        + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>';
+    };
+    s += line('p90', 1.6, 0.55) + line('p10', 1.6, 0.55) + line('p50', 2.4, 1);
+
+    /* money back, which is the line the cone has to clear before any of this is a return */
+    const cy = Y(committed);
+    s += '<line x1="' + L + '" y1="' + cy + '" x2="' + (L + iw) + '" y2="' + cy
+      + '" stroke="#141A22" stroke-width="1.5" stroke-dasharray="4,3"/>'
+      + '<text x="' + (L + 6) + '" y="' + (cy - 6) + '" font-size="11" font-weight="700" '
+      + 'fill="#141A22">money back &middot; ' + shortMoney(committed) + '</text>';
+
+    /* WHERE THE TYPICAL FUTURE GETS ITS MONEY BACK, marked on the chart rather than only
+       stated in the sentence below it. A member read the chart, found no year, and reported
+       the note missing; it was not missing, but looking for it on the chart is exactly what
+       a reader does. Same rule as the caption -- the first year the median reaches the line
+       -- so the two can never disagree. The dot is INTERPOLATED to the true crossing so it
+       sits on the line rather than at the nearest year tick, while the label states the
+       caption's year. */
+    const beIdx = rows.findIndex((r) => r.p50 >= committed);
+    if (beIdx >= 0) {
+      const b = rows[beIdx];
+      let bx = X(b.year);
+      if (beIdx > 0) {
+        const a = rows[beIdx - 1];
+        const gap = (b.p50 - a.p50) || 1;
+        const frac = Math.min(1, Math.max(0, (committed - a.p50) / gap));
+        bx = X(a.year + frac * (b.year - a.year));
+      }
+      /* Keep the label inside the plot. Near either edge it anchors rather than centres,
+         so a 2026 or a 2042 crossing does not hang off the chart. */
+      const nearL = bx < L + 46, nearR = bx > L + iw - 46;
+      const anchor = nearL ? 'start' : nearR ? 'end' : 'middle';
+      const tx = nearL ? L + 2 : nearR ? L + iw - 2 : bx;
+      s += '<line x1="' + bx.toFixed(1) + '" y1="' + cy + '" x2="' + bx.toFixed(1) + '" y2="'
+        + (T + ih) + '" stroke="#141A22" stroke-width="1" stroke-dasharray="2,3" opacity="0.4"/>'
+        + '<circle cx="' + bx.toFixed(1) + '" cy="' + cy + '" r="4.5" fill="#141A22"/>'
+        + '<text x="' + tx.toFixed(1) + '" y="' + (cy + 19) + '" text-anchor="' + anchor
+        + '" font-size="12" font-weight="700" fill="#141A22">' + b.year + '</text>'
+        + '<text x="' + tx.toFixed(1) + '" y="' + (cy + 32) + '" text-anchor="' + anchor
+        + '" font-size="10" fill="#6B7A8C">typical breaks even</text>';
+    }
+
+    /* direct labels at the open end, so the three edges are never colour-alone */
+    const last = rows[rows.length - 1];
+    const lab = [['Good run', last.p90], ['Typical', last.p50], ['Bad run', last.p10]];
+    let prevY = -99;
+    lab.forEach(([txt, v]) => {
+      let ly = Y(v) + 3.5;
+      if (ly - prevY < 26) ly = prevY + 26;
+      prevY = ly;
+      s += '<circle cx="' + X(last.year) + '" cy="' + Y(v) + '" r="3.6" fill="' + raw + '"/>'
+        + '<text x="' + (L + iw + 8) + '" y="' + (ly - 6) + '" font-size="10" fill="#6B7A8C">'
+        + txt + '</text>'
+        + '<text x="' + (L + iw + 8) + '" y="' + (ly + 6) + '" font-size="12" font-weight="700" '
+        + 'fill="' + raw + '">' + shortMoney(v) + '</text>';
+    });
+
+    /* a hit target per year, wider than the marks */
+    rows.forEach((r, i) => {
+      const x = X(r.year), w = iw / Math.max(1, rows.length - 1);
+      s += '<rect x="' + (x - w / 2) + '" y="' + T + '" width="' + w + '" height="' + ih
+        + '" fill="transparent"><title>' + esc('By end of ' + r.year + '\n'
+          + 'Good run   ' + money(r.p90) + '\n'
+          + 'Typical    ' + money(r.p50) + '\n'
+          + 'Bad run    ' + money(r.p10)) + '</title></rect>';
+    });
+
+    s += '<text x="' + L + '" y="' + (H - 8) + '" font-size="10" fill="#6B7A8C">'
+      + 'total cash returned by the end of that year</text></svg>';
+
+    const key = [['Bad run (10th pct)', 0.55], ['Typical (median)', 1], ['Good run (90th pct)', 0.55]];
+    return s + '<div class="row" style="margin:8px 0 0">'
+      + key.map(([t, op]) => '<span style="display:flex;align-items:center;gap:6px;font-size:12px;'
+        + 'color:#6B7A8C"><span style="width:11px;height:3px;border-radius:2px;background:' + raw
+        + ';opacity:' + op + '"></span>' + t + '</span>').join('') + '</div>';
+  }
+
+  /* the distribution chart, drawn as inline SVG so there is no chart library to load */
+  function distChart(series, active) {
+    const W = 880, H = 260, L = 44, R = 16, T = 14, B = 46;
+    const iw = W - L - R, ih = H - T - B;
+    const n = series[0].st.histBins, HI = series[0].st.histMax;
+    let maxY = 0;
+    series.forEach((s) => s.st.hist.forEach((v) => { if (v > maxY) maxY = v; }));
+    maxY = Math.max(maxY, 0.01) * 1.14;
+    const X = (m) => L + iw * (m / HI), Y = (v) => T + ih - (v / maxY) * ih;
+
+    let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block" role="img">';
+    /* Gridlines derived from the range rather than fixed at six half-steps, so the axis
+       cannot silently disagree with the data when the range changes. */
+    const gstep = HI > 3.5 ? 1.0 : 0.5, gcount = Math.round(HI / gstep);
+    for (let g = 0; g <= gcount; g++) {
+      const gm = g * gstep, gx = X(gm);
+      s += '<line x1="' + gx + '" y1="' + T + '" x2="' + gx + '" y2="' + (T + ih) + '" stroke="#EDF1F6"/>'
+        + '<text x="' + gx + '" y="' + (H - 26) + '" text-anchor="middle" font-size="10" fill="#6B7A8C">'
+        + gm.toFixed(1) + 'x' + (g === gcount ? '+' : '') + '</text>';
+    }
+    const area = (hist, col, op, w) => {
+      let d = 'M' + X(0) + ' ' + Y(0);
+      for (let i = 0; i < n; i++) {
+        d += ' L' + X(i / n * HI) + ' ' + Y(hist[i]) + ' L' + X((i + 1) / n * HI) + ' ' + Y(hist[i]);
+      }
+      d += ' L' + X(HI) + ' ' + Y(0) + ' Z';
+      return '<path d="' + d + '" fill="' + col + '" opacity="' + op + '" stroke="' + col
+        + '" stroke-width="' + w + '" stroke-linejoin="round"/>';
+    };
+    series.forEach((sr) => { if (sr.key !== active) s += area(sr.st.hist, sr.raw, 0.07, 1.2); });
+    series.forEach((sr) => { if (sr.key === active) s += area(sr.st.hist, sr.raw, 0.28, 2.4); });
+
+    const bx = X(1.0);
+    s += '<line x1="' + bx + '" y1="' + (T - 2) + '" x2="' + bx + '" y2="' + (T + ih)
+      + '" stroke="#141A22" stroke-width="1.5" stroke-dasharray="4,3"/>'
+      + '<text x="' + (bx + 6) + '" y="' + (T + 11) + '" font-size="11" font-weight="700" fill="#141A22">break even</text>';
+
+    /* Medians as dots on the axis, with the NUMBERS in a corner key rather than floating
+       over the curves. They used to sit above each dot, which worked while the three were
+       far apart and became unreadable the moment they converged -- on a blended book they
+       can land within a few hundredths of each other, on top of the tallest curve. */
+    series.forEach((sr) => {
+      const on = sr.key === active, t = sr.st.totals;
+      const mx = X(t.p50 / t.committed);
+      s += '<circle cx="' + mx + '" cy="' + (T + ih + 1) + '" r="' + (on ? 5 : 3.2) + '" fill="' + sr.raw
+        + '" opacity="' + (on ? 1 : 0.5) + '"/>';
+    });
+    const kx = L + 12, ky = T + 14;
+    s += '<text x="' + kx + '" y="' + ky + '" font-size="9" font-weight="700" fill="#6B7A8C" '
+      + 'letter-spacing="0.5">TYPICAL RUN (MEDIAN)</text>';
+    series.forEach((sr, k) => {
+      const on = sr.key === active, t = sr.st.totals, yy = ky + 15 + k * 15;
+      s += '<rect x="' + kx + '" y="' + (yy - 4) + '" width="10" height="3" rx="1.5" fill="'
+        + sr.raw + '" opacity="' + (on ? 1 : 0.5) + '"/>'
+        + '<text x="' + (kx + 17) + '" y="' + yy + '" font-size="11" font-weight="700" fill="'
+        + sr.raw + '" opacity="' + (on ? 1 : 0.6) + '">' + mult(t.p50 / t.committed) + '</text>'
+        + '<text x="' + (kx + 56) + '" y="' + yy + '" font-size="10" fill="#6B7A8C" '
+        + 'opacity="' + (on ? 1 : 0.6) + '">' + esc(sr.label) + '</text>';
+    });
+    s += '<text x="' + L + '" y="' + (H - 8) + '" font-size="10" fill="#6B7A8C">multiple on committed capital</text>';
+    for (let i = 0; i < n; i++) {
+      const b0 = i / n * HI, b1 = (i + 1) / n * HI;
+      let tip = b0.toFixed(1) + 'x to ' + b1.toFixed(1) + 'x';
+      series.forEach((sr) => { tip += '\n' + sr.label + ' ' + (sr.st.hist[i] * 100).toFixed(1) + '%'; });
+      s += '<rect x="' + X(b0) + '" y="' + T + '" width="' + (X(b1) - X(b0)) + '" height="' + ih
+        + '" fill="transparent"><title>' + esc(tip) + '</title></rect>';
+    }
+    s += '</svg><div class="row" style="margin:8px 0 0">'
+      + series.map((sr) => '<span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6B7A8C">'
+        + '<span style="width:11px;height:3px;border-radius:2px;background:' + sr.raw + '"></span>'
+        + esc(sr.label) + '</span>').join('') + '</div>';
+    return s;
+  }
+
+  function glossary(T) {
+    const G = [
+      ['Typical', 'The tool plays your portfolio out ' + Engine.CFG.paths.toLocaleString('en-US') + ' times. Line those futures up from worst to best '
+        + 'and this is the one in the middle. If a year shows $0, it means more than half the time nothing '
+        + 'arrives that year at all. Use this rather than the average: one big winner pulls an average up '
+        + 'above what most futures actually pay you, and you only get one future.'],
+      ['Odds of any cash', 'How often that year pays anything at all. It is here instead of a bad-run column, '
+        + 'which in a portfolio like this reads $0 in every single year and tells you nothing.'],
+      ['Good run', 'Out of 100 futures, only 10 do better than this in that year. Big numbers here are real: '
+        + 'several deals can happen to land in the same year.'],
+      ['Why you cannot add the year-by-year column down', 'The two tables count differently, and this is the '
+        + 'one thing worth getting right. In the year-by-year table each year is ranked on its own, so the '
+        + 'good run in 2030 and the good run in 2034 are different futures. Adding them builds a future '
+        + 'nobody had. On a real portfolio that overstated the lifetime figure by 69%. The by-the-end-of-year '
+        + 'table adds each future up FIRST and ranks once, so every number there is a real total that one '
+        + 'real future reached. That one you can read straight down.'],
+      ['Why a preferred return is taken out of the exit', 'When a sponsor quotes a multiple, that '
+        + 'number already includes the preferred return they pay you along the way. So if the tool paid you '
+        + 'the preferred return AND then sold at the full multiple, it would be paying you the same money '
+        + 'twice. The exit here is the multiple with those payments taken back out.'],
+      ['A fund is not a big deal', 'Two separate things. WHEN it pays: a fund sells down over several years '
+        + 'instead of exiting on a date, so its proceeds are spread across a window. Anything paying a preferred return '
+        + 'is treated as a fund, because most vehicles that pay one are funds; put 1 in the deals column to say '
+        + 'a position is a single company and it exits on one date instead. HOW MUCH it returns: a venture fund '
+        + 'holding ' + Engine.CFG.fundMinDeals + '+ companies gets its own outcome table, because the '
+        + 'single-deal power law carries a 30% chance of returning zero and a fund that size cannot do that.'],
+      ['Liquidity window', 'When a fund actually sells down, in years from when you funded it. That is not the '
+        + 'same as its stated life, because a fund can finish paying out and wind up afterwards. If a sponsor '
+        + 'has told you "years five through eight", put 5 and 8 in the two liquidity columns. Left blank it '
+        + 'runs over the back 40% of the hold, which is roughly what most sponsors describe anyway. '
+        + 'A venture fund’s window runs ' + Engine.CFG.liqTailVenture + ' years past the hold, because venture funds '
+        + 'routinely extend; an income fund winds up on its hold.'],
+      ['What a yearly return means here',
+        'A multiple tells you how much came back. A yearly return tells you how fast. If you '
+        + 'put in $100 and got $226 back after seven years, the multiple is 2.26x and the '
+        + 'yearly return is about 12%: $100 growing at 12% a year for seven years lands at $226. '
+        + 'It is worked out from the actual dates money moved, the same way a sponsor works out '
+        + 'the figure in their own documents. Nothing is assumed about what you do with the cash '
+        + 'once it is back in your hands.'],
+      ['Why two deals with the same multiple can have very different yearly returns',
+        'Because a yearly return counts the waiting. Take one deal at 5.0x over ten years '
+        + 'and another at 4.3x over four. The second has the smaller multiple and roughly three times '
+        + 'the yearly return, because your money is only tied up for four years and then you '
+        + 'have it back to do something else with. If you care about total dollars, read the '
+        + 'multiple. If you care about how hard your money is working while it sits there, read '
+        + 'the yearly return. They answer different questions and they will often disagree.'],
+      ['Sponsor case, and why it is usually far above Typical',
+        'Sponsor case is the sponsor\u2019s own target multiple, expressed as a yearly rate. '
+        + 'Typical is what this tool expects once the chance of things going wrong is counted. '
+        + 'The gap is not the tool calling anyone dishonest. It is that a sponsor\u2019s number '
+        + 'is what happens if the plan works, and the tool puts that outcome in the best one in '
+        + 'ten. The other nine futures are what makes Typical lower.'],
+      ['Chance of losing it all',
+        'The odds, not an amount. 31% means that in 31 of every 100 simulated futures, that deal '
+        + 'pays back nothing at all. It is a positive number because it counts how OFTEN, not '
+        + 'how much. A single early-stage company really does fail about a third of the time; a '
+        + 'fund holding twenty of them essentially never goes to zero, which is why funds and '
+        + 'single deals are priced differently here.'],
+      ['Committed, funded, and still callable',
+        'Committed is what you signed up for. Funded is what has actually left your account. '
+        + 'Still callable is the difference, and it is a binding obligation, not an option: '
+        + 'the sponsor can ask for it and you have to pay. It matters for planning, because a '
+        + 'capital call landing in a year with no incoming cash is the most useful thing this '
+        + 'calendar can show you. Every return figure here is measured against the FULL '
+        + 'commitment, not just what you have paid in so far, because by the time a deal exits '
+        + 'the whole commitment will have been called.'],
+      ['A preferred return is not guaranteed, and the tool no longer pretends it is',
+        'Until v1.17 the model paid every preferred return in full in every single future, which '
+        + 'made the income sleeves look steadier than they are. It does not any more. How much '
+        + 'arrives is tied to how the deal turned out, using the SAME draw as the exit rather '
+        + 'than a separate one, because the fund that hands back less than plan is the same '
+        + 'fund that stopped paying. A position that writes off its equity pays about a quarter '
+        + 'of its scheduled preferred return; one that lands well below plan pays about 70%; '
+        + 'one near plan pays about 90%. Those shares are judgements, not findings, and they are '
+        + 'in one place in the code so they can be argued with.'],
+      ['What this still assumes', 'That deals fail independently of one another. That is '
+        + 'optimistic: in a real downturn outcomes move together, which would make the blended '
+        + 'picture less flattering than it looks here. It is the biggest remaining hole in the '
+        + 'model and it is a harder one to fix honestly.'],
+    ];
+    return '<div class="card"><h2>Reading these tables</h2>'
+      + G.map(([t, d]) => '<div class="glos"><div class="t">' + t + '</div><div class="d">' + d + '</div></div>').join('')
+      + '</div>';
+  }
+
+  function wire() {
+    document.querySelectorAll('[data-mode]').forEach((b) =>
+      b.onclick = () => { MODE = b.getAttribute('data-mode'); render(); });
+    document.querySelectorAll('[data-dist]').forEach((b) =>
+      b.onclick = () => { DIST = b.getAttribute('data-dist'); render(); });
+    document.querySelectorAll('[data-dsort]').forEach((b) =>
+      b.onclick = () => { DEALSORT = b.getAttribute('data-dsort'); render(); });
+  }
+
+  /* ── intake ──────────────────────────────────────────────────────────────── */
+  let LASTMAP = null;      // the header map from the sheet just read, for the age note
+  let UNMATCHED = [];      // rows that matched no shared deal file, and why
+
+  /* load(rows, skipped, sheets): the one door every book comes through (upload or demo).
+       rows     tracker rows (from rowsFromSheet, or the example book's JSON)
+       skipped  names of rows that looked like deals but had no commitment
+       sheets   every sheet of the workbook, for plugins; {} for the demo
+     It replaces BOOK and SHEETS together, or, when nothing can be run, changes neither. */
+  let LOADSEQ = 0;         // a newer load makes an older one in flight stop (QA L7)
+  async function load(rows, skipped, sheets) {
+    const seq = ++LOADSEQ;
+    /* THE DEMO PATH HAS NO SHEET, so nothing sets LASTMAP and the age note used to fire on
+       every run of the example book -- telling a reader their tracker was out of date when
+       what they had pressed was the button on this page. A header row and a set of keys
+       carry the same signal (which columns exist), so derive one from the other when no
+       sheet was parsed. A real upload goes through rowsFromSheet, which sets LASTMAP
+       properly, so this only ever covers the demo. */
+    if (!LASTMAP) {
+      const keys = {};
+      for (const r of rows || []) for (const k of Object.keys(r)) keys[k] = 0;
+      LASTMAP = keys;
+    }
+    // fill blanks from the shared deal files BEFORE validating, so a term that GC already
+    // knows does not get reported as something the holder failed to supply
+    await enrich(rows);
+    if (seq !== LOADSEQ) return;   // a newer file arrived while this one was enriching
+    const problems = validate(rows, skipped);
+    const book = Engine.buildBook(rows);
+    /* QA H5 / H6: what buildBook had to correct (a bare 8 read as 8%, a negative funded
+       figure, uncalled above what is left to call), each with the figure the model ran on. */
+    const corrected = Engine.bookWarnings ? Engine.bookWarnings(book) : [];
+    const all = problems.concat(corrected);
+    const list = (n) => all.slice(0, n).map(esc).join('<br>')
+      + (all.length > n ? '<br>... and ' + (all.length - n) + ' more.' : '');
+    if (!book.length) {
+      /* QA M2: the previous BOOK and SHEETS are left exactly as they were, so a plugin tab can
+         never pair the old book with this file's sheets. */
+      $('#intakeErr').innerHTML = '<div class="err"><b>Nothing to run.</b> No row had a usable commitment. '
+        + (all.length ? '<br>' + list(6) : '')
+        + (BOOK && BOOK.length ? '<br>The results below are still from the file you loaded before.' : '')
+        + '</div>';
+      return;
+    }
+    BOOK = book;
+    SHEETS = sheets || {};
+    const age = ageNote(LASTMAP);
+    $('#intakeErr').innerHTML = age + matchNote() + (all.length
+      ? '<div class="err"><b>Loaded ' + BOOK.length + ' positions, with ' + all.length
+        + ' thing' + (all.length > 1 ? 's' : '') + ' worth fixing.</b> These rows are '
+        + 'running on whatever was there, plus the defaults each line below names.<br>' + list(12) + '</div>'
+      : '');
+    MODE = 'all'; DIST = 'all'; TAB = 'dash'; OPEN = {};
+    /* QA H2: tell the plan-includes layer about the new book now, not only when a plugin tab
+       next renders, so the Deal tester can never run against the previous household. */
+    const ctx = { book: BOOK, mode: MODE, sheets: SHEETS };
+    try {
+      if (typeof window !== 'undefined' && window.PlanIncludes && typeof window.PlanIncludes.remember === 'function') {
+        window.PlanIncludes.remember(ctx);
+      }
+      if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
+        window.dispatchEvent(new window.CustomEvent('privatedeals:book', { detail: ctx }));
+      }
+    } catch (e) { /* a listener's error must not stop the book from rendering */ }
+    render();
+    $('#out').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /* readWorkbook(wb) -> { sheets, rows, skipped } or { sheets, error }
+     QA C1 (2026-10-31): EVERY sheet is read into `sheets` FIRST, and only then is the
+     positions sheet chosen (the first sheet, in workbook order, that parses into rows). The
+     old loop returned as soon as it found positions, so in the shipped template's own order
+     (Read me, Positions, What you get back, You, Balances) the You and Balances tabs never
+     reached the plugins and Retirement ran on the sample household.
+     This app still has no use for a You or Balances tab and does not learn what one is; it
+     only hands them on. Pure: no DOM, so tests can call it. */
+  function readWorkbook(wb) {
+    const sheets = {};
+    for (const nm of wb.SheetNames) {
+      sheets[nm] = XLSX.utils.sheet_to_json(wb.Sheets[nm], { header: 1, raw: true });
+    }
+    for (const nm of wb.SheetNames) {
+      const res = rowsFromSheet(sheets[nm]);
+      if (res.rows && res.rows.length) return { sheets, rows: res.rows, skipped: res.skipped, sheet: nm };
+    }
+    return { sheets, error: 'no-positions' };
+  }
+
+  function readFile(f) {
+    const fr = new FileReader();
+    fr.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        const res = readWorkbook(wb);
+        if (res.rows) { load(res.rows, res.skipped, res.sheets); return; }
+        /* Nothing is changed on failure: BOOK and SHEETS stay as they were (QA M2). */
+        $('#intakeErr').innerHTML = '<div class="err"><b>Could not find your positions.</b> Your '
+          + 'file needs a row of column headers with a deal name and a commitment, and at least '
+          + 'one row with a commitment above zero. ' + TEMPLATE_LINK + ' to see the layout.</div>';
+      } catch (err) {
+        $('#intakeErr').innerHTML = '<div class="err"><b>Could not read that file.</b> '
+          + esc(err.message) + ' ' + TEMPLATE_LINK + ' for a file that is known to work.</div>';
+      }
+    };
+    fr.readAsArrayBuffer(f);
+  }
+
+  /* DISCOVERABLE HOVER. The charts have carried per-year amounts since v1.23 as native
+     tooltips (an SVG <title>, or a title attribute), and nobody knew: browsers wait about a
+     second before showing one and give no cue that it exists. A member asked for
+     hover on a chart that already had it. So inside the results, any element carrying a
+     tooltip now shows it at once, in a drawn box that follows the pointer, and the cursor
+     changes over it. The text is moved, not copied, so the browser's own tooltip does not
+     pop up on top of ours; an aria-label keeps it readable to a screen reader. */
+  (function () {
+    const tip = document.createElement('div');
+    tip.className = 'tipbox';
+    tip.setAttribute('role', 'tooltip');
+    tip.style.display = 'none';
+    document.body.appendChild(tip);
+    const SVGNS = 'http://www.w3.org/2000/svg';
+    const claim = (el) => {
+      for (let n = el; n && n.nodeType === 1 && n.id !== 'out'; n = n.parentNode) {
+        if (n.hasAttribute('data-tip')) return n;
+        if (!n.closest || !n.closest('#out')) return null;
+        if (n.hasAttribute('title')) {
+          const t = n.getAttribute('title');
+          n.removeAttribute('title'); n.setAttribute('data-tip', t);
+          if (!n.hasAttribute('aria-label')) n.setAttribute('aria-label', t);
+          return n;
+        }
+        if (n.namespaceURI === SVGNS) {
+          const t = Array.prototype.find.call(n.children, (c) => c.tagName.toLowerCase() === 'title');
+          if (t) {
+            n.setAttribute('data-tip', t.textContent); n.setAttribute('aria-label', t.textContent);
+            t.remove();
+            return n;
+          }
+        }
+      }
+      return null;
+    };
+    const place = (e) => {
+      const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+      let x = e.clientX + pad, y = e.clientY + pad;
+      if (x + w > window.innerWidth - 8) x = Math.max(8, e.clientX - w - pad);
+      if (y + h > window.innerHeight - 8) y = Math.max(8, e.clientY - h - pad);
+      tip.style.left = x + 'px'; tip.style.top = y + 'px';
+    };
+    document.addEventListener('mouseover', (e) => {
+      const el = claim(e.target);
+      if (!el) { tip.style.display = 'none'; return; }
+      tip.textContent = el.getAttribute('data-tip');
+      tip.style.display = 'block';
+      place(e);
+    });
+    document.addEventListener('mousemove', (e) => { if (tip.style.display === 'block') place(e); });
+    document.addEventListener('scroll', () => { tip.style.display = 'none'; }, true);
+  })();
+
+  // the badge reads the engine's own version, so the label cannot drift from the model
+  (function () {
+    const el = $('#ver'), mask = $('#relMask');
+    if (!el) return;
+    el.textContent = Engine.CFG.version + ' · ' + Engine.CFG.released;
+    if (!mask) return;
+    const when = $('#relWhen');
+    if (when) when.textContent = 'You are on ' + Engine.CFG.version
+      + ', released ' + Engine.CFG.released + '.';
+    const open = () => mask.classList.remove('hidden');
+    const shut = () => mask.classList.add('hidden');
+    el.onclick = open;
+    $('#relClose').onclick = shut;
+    // clicking the backdrop closes; clicking inside the panel must not
+    mask.onclick = (e) => { if (e.target === mask) shut(); };
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') shut(); });
+  })();
+
+  /* TEST HOOK: the pure intake functions, for tests/intake.test.mjs. Nothing in the app reads
+     it, and it holds no state of its own. */
+  if (typeof window !== 'undefined') {
+    window.AppIntake = { FIELDS, mapHeaders, rowsFromSheet, readWorkbook, validate };
+  }
+
+  $('#pick').onclick = () => $('#file').click();
+  /* The value is cleared after each pick, or choosing the same file again (after fixing it
+     in Excel) fires no change event and nothing happens (QA L6). */
+  $('#file').onchange = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) readFile(f);
+    try { e.target.value = ''; } catch (err) { /* some browsers refuse; harmless */ }
+  };
+  $('#demo').onclick = () => {
+    /* Tagged with the version like the deal files, or a release serves yesterday's example
+       book out of the ten-minute Pages cache against today's engine. */
+    LASTMAP = null;   // the demo is not the tracker loaded before it; its age note must not carry over
+    fetch('example-book.json?v=' + encodeURIComponent(Engine.CFG.version)).then((r) => r.json())
+      .then((rows) => load(rows, [], {})).catch(() => {
+      $('#intakeErr').innerHTML = '<div class="err">Example file not found next to this page.</div>';
+    });
+  };
+  const drop = $('#drop');
+  ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.add('over');
+  }));
+  ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.remove('over');
+  }));
+  drop.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+  });
+})();

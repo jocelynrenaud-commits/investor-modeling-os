@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heavy Machinery — Tax Modeling Application</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#eef1f6;color:#1a2332;line-height:1.5;font-size:14px}
+.container{max-width:1240px;margin:0 auto;padding:22px 20px 80px}
+.alertbar{background:#fff7ed;border:2px solid #d97706;border-left:7px solid #d97706;border-radius:10px;padding:14px 18px;margin-bottom:16px}
+.alertbar .at{font-size:14px;font-weight:800;color:#92400e;display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.alertbar .ab{font-size:12.5px;color:#7c2d12;line-height:1.5}
+.alertbar .fed{display:inline-block;margin-top:8px;background:#92400e;color:#fff;font-weight:800;font-size:11.5px;padding:4px 11px;border-radius:5px;letter-spacing:.3px}
+header{background:linear-gradient(135deg,#14304d,#256a8f);color:#fff;padding:26px 30px;border-radius:10px;margin-bottom:16px}
+header h1{margin:0 0 6px;font-size:24px;font-weight:800;letter-spacing:-.3px}
+header .sub{margin:0;font-size:13.5px;opacity:.9;max-width:820px}
+header .tag{display:inline-block;margin-top:11px;padding:3px 10px;background:rgba(255,255,255,.18);border-radius:5px;font-size:11.5px;font-family:ui-monospace,Menlo,monospace;letter-spacing:.3px}
+.card{background:#fff;border:1px solid #dbe3ee;border-radius:12px;padding:20px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(20,40,80,.05)}
+h2{margin:0 0 4px;font-size:18px;font-weight:800;color:#152a4d}
+h3{margin:0 0 4px;font-size:15px;font-weight:800;color:#152a4d}
+.csub{margin:0 0 14px;font-size:12.5px;color:#5b6b80}
+.exp{margin:0 0 12px;font-size:12px;color:#5b6b80}
+.sectlabel{font-size:12px;font-weight:800;color:#23568f;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px;border-bottom:1px solid #e5ecf5;padding-bottom:4px}
+.inputs-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:820px){.inputs-grid{grid-template-columns:1fr}}
+.field label{display:block;font-size:12.5px;font-weight:700;color:#33425a;margin-bottom:4px}
+.field input,.field select{width:100%;padding:8px 10px;font-size:13.5px;border:1px solid #c5d0de;border-radius:6px;font-family:inherit;background:#fff}
+.field .hint{font-size:11px;color:#7a8aa0;margin-top:3px}
+.toggle{display:flex;gap:0;border:1px solid #c5d0de;border-radius:6px;overflow:hidden;width:fit-content}
+.toggle button{padding:8px 16px;font-size:12.5px;font-weight:700;border:none;background:#fbfcfe;color:#5b6b80;cursor:pointer;font-family:inherit}
+.toggle button.active{background:#23568f;color:#fff}
+.income-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:8px;margin-bottom:6px}
+@media(max-width:820px){.income-grid{grid-template-columns:repeat(4,1fr)}}
+.income-cell label{font-size:10.5px;color:#5b6b80;font-weight:700}
+.income-cell input{width:100%;padding:6px 4px;font-size:12px;text-align:center;border:1px solid #c5d0de;border-radius:5px;font-family:inherit}
+.depsched{display:flex;flex-wrap:wrap;gap:6px;align-items:flex-end;margin:6px 0}
+.depsched .dcell{display:flex;flex-direction:column;width:56px}
+.depsched .dcell label{font-size:10px;color:#5b6b80;font-weight:700;margin-bottom:2px}
+.depsched .dcell input{width:100%;padding:5px 4px;font-size:12px;text-align:center;border:1px solid #c5d0de;border-radius:5px;font-family:inherit}
+.depsched .dtot{font-size:12px;font-weight:700;margin-left:8px;align-self:center}
+.presetbtns{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 2px}
+.presetbtns button{padding:5px 10px;font-size:11.5px;font-weight:700;border:1px solid #c5d0de;background:#fbfcfe;color:#23568f;border-radius:5px;cursor:pointer;font-family:inherit}
+#depSchedWrap{margin-top:8px;padding:10px 12px;background:#f6f9fd;border:1px solid #dbe6f2;border-radius:8px}
+.ttip{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#23568f;color:#fff;font-size:10px;font-weight:800;cursor:pointer;font-style:normal;vertical-align:middle}
+.tabnav{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.tabbtn{padding:9px 18px;font-size:13px;font-weight:700;border:1px solid #cdd8e6;background:#fff;color:#33425a;border-radius:8px;cursor:pointer;font-family:inherit}
+.tabbtn.active{background:#152a4d;color:#fff;border-color:#152a4d}
+.page{display:none}.page.active{display:block}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media(max-width:820px){.metrics{grid-template-columns:1fr}}
+.metric{background:#f6f9fd;border:1px solid #dbe6f2;border-radius:10px;padding:13px 15px;cursor:pointer;position:relative;transition:box-shadow .15s}
+.metric:hover{box-shadow:0 2px 10px rgba(20,40,80,.12)}
+.metric.green{background:#f0faf4;border-color:#bfe6cf}
+.metric.red{background:#fdf3f2;border-color:#f2c9c4}
+.metric .k{font-size:11.5px;font-weight:700;color:#5b6b80;text-transform:uppercase;letter-spacing:.3px}
+.metric .v{font-size:23px;font-weight:800;color:#152a4d;margin:3px 0}
+.metric.green .v{color:#15803d}.metric.red .v{color:#b91c1c}
+.metric .n{font-size:11px;color:#7a8aa0}
+.metric .seehow{position:absolute;top:11px;right:13px;font-size:10.5px;font-weight:700;color:#23568f}
+.dataTable{width:100%;border-collapse:collapse;font-size:12.5px}
+.dataTable th,.dataTable td{padding:6px 9px;border-bottom:1px solid #eef2f7;text-align:right;white-space:nowrap}
+.dataTable th:first-child,.dataTable td:first-child{text-align:left}
+.dataTable thead th{background:#152a4d;color:#fff;font-size:11.5px;position:sticky;top:0}
+.dataTable .section-row td{background:#eef3fa;font-weight:800;color:#23568f;text-transform:uppercase;font-size:11px;letter-spacing:.3px}
+.dataTable .total-row td{border-top:2px solid #cdd8e6;font-weight:800}
+.cellpop{color:#1d4ed8;border-bottom:1px dashed #1d4ed8;cursor:pointer}
+.cmpcard table{width:100%;border-collapse:collapse;font-size:13px}
+.cmpcard th,.cmpcard td{padding:7px 10px;border-bottom:1px solid #e5ecf5;text-align:right}
+.cmpcard th:first-child,.cmpcard td:first-child{text-align:left}
+.cmpcard thead th{background:#152a4d;color:#fff;font-size:12px}
+.cmpcard td.pos{color:#15803d;font-weight:700}.cmpcard td.neg{color:#b91c1c;font-weight:700}
+.cmpcard tr.hl td{background:#fdf8ec}
+.bd{width:100%;border-collapse:collapse;font-size:12px}
+.bd th,.bd td{padding:5px 8px;border-bottom:1px solid #eef2f7;text-align:right}
+.bd th:first-child,.bd td:first-child{text-align:left}
+.bd thead th{background:#eef3fa;color:#23568f;font-size:11px}
+.bd .total-row td,.bd .tot td{border-top:2px solid #cdd8e6;font-weight:800}
+.svgwrap{width:100%;overflow-x:auto;margin:8px 0}
+.walkbar-lbl{font-size:11px;fill:#33425a;font-weight:700}
+.walk-note{font-size:11.5px;color:#5b6b80;margin:4px 0 0}
+.step2{background:#f6f9fd;border-left:3px solid #23568f;padding:9px 12px;font-size:12.5px;margin:10px 0;border-radius:0 6px 6px 0}
+details summary{cursor:pointer;font-weight:700;color:#23568f;font-size:13px}
+#modalBg{display:none;position:fixed;inset:0;background:rgba(15,25,45,.55);z-index:100;align-items:center;justify-content:center;padding:20px}
+#modalBox{background:#fff;border-radius:12px;max-width:720px;width:100%;max-height:88vh;overflow-y:auto;padding:24px 26px;position:relative}
+#modalBox .x{position:absolute;top:14px;right:18px;font-size:24px;color:#7a8aa0;cursor:pointer;line-height:1}
+#modalBox h3{font-size:18px;margin:0 0 3px}
+#modalBox .sub{color:#5b6b80;font-size:12.5px;margin:0 0 14px}
+#verBadge{position:fixed;left:12px;bottom:10px;font-size:11px;color:#41506a;background:rgba(255,255,255,.94);border:1px solid #cdd8e6;border-radius:6px;padding:4px 10px;font-family:ui-monospace,Menlo,monospace;cursor:pointer;z-index:60;box-shadow:0 2px 8px rgba(20,40,80,.10)}
+.gloss dl{display:grid;grid-template-columns:200px 1fr;gap:6px 16px;font-size:12.5px}
+@media(max-width:760px){.gloss dl{grid-template-columns:1fr}}
+.gloss dt{font-weight:800;color:#23568f}
+@media print{.toggle button.active,.tabbtn.active{background:#23568f !important;color:#fff !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.tabbtn.active{background:#152a4d !important}.toggle button:not(.active),.tabbtn:not(.active){color:#8a97a8 !important}}
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="alertbar">
+<div class="at">⚠️ Illustrative modeling tool — not tax advice</div>
+<div class="ab">This is an <b>educational model for illustrative purposes only</b>. It simplifies a complex area of tax law, and <b>errors are possible</b>. The outputs are estimates, not a tax return, an opinion, or a recommendation. Do not act on these numbers — verify every figure with your own qualified tax advisor. The model assumes the deal's make-or-break position holds: that your losses are <b>non-passive because you materially participate under §469</b> (the &gt;100-hour Test 3 in Treas. Reg. §1.469-5T(a)(3)). If that fails, the Year-1 deduction cannot offset your wages as shown.
+<span class="fed">FEDERAL INCOME TAX ONLY — NO STATE TAX (many states do not conform to federal bonus depreciation; model your state separately)</span></div>
+</div>
+
+<header>
+<h1>Heavy Machinery — Tax Modeling Application</h1>
+<p class="sub">A federal income-tax model for buying heavy equipment into the Highland Steel / EZ Equipment Zone &ldquo;Advantage Flex&rdquo; rental program through your LLC. It shows the Year-1 depreciation shelter, the annual lease income and deductible interest, and the §1245 recapture at the Year-6 buyback. Change any input and every number, table, and chart recomputes live.</p>
+<span class="tag">FEDERAL · 2026 BRACKETS (Rev. Proc. 2025-32) · SINGLE or MFJ · NOT TAX ADVICE</span>
+</header>
+
+<div class="card">
+<p style="margin:0 0 12px;font-size:13px">This tool answers one question: <b>what does buying heavy equipment into this program do to your federal taxes &mdash; in Year 1, every year you hold it, and in the year you exit?</b> It is built to be read by someone seeing it for the first time, so every field, table, and chart is labeled and explained. <b>Tip:</b> click any blue <span class="ttip" data-tip="Click any headline result box or underlined number for a full, step-by-step breakdown with charts.">i</span> for help, click any <b>headline result box</b> for a full breakdown with charts, and click any <u>underlined number</u> in the detail table to see how it was computed.</p>
+<div class="inputs-grid">
+ <div class="step2" style="margin:0"><b style="color:#23568f">STEP 1 &middot; Set your tax picture</b><br>Pick Single or MFJ, enter your income for each year, and set your personal deductions. Lower a later year to model exiting in a low-income (retirement) year.</div>
+ <div class="step2" style="margin:0"><b style="color:#23568f">STEP 2 &middot; Set the deal</b><br>Equipment value, down payment, loan rate/term, depreciation method, exit year, and the buyback %. Lease income auto-fills to the program figure.</div>
+ <div class="step2" style="margin:0"><b style="color:#23568f">STEP 3 &middot; Read the tax effect</b><br>The Tax Modeling tab shows the year-by-year picture; the Tax Waterfall tab shows which brackets your savings and recapture land in.</div>
+</div>
+<details style="margin-top:12px"><summary>How the tax math works (read this once) &#9662;</summary>
+<div style="font-size:12.5px;margin-top:8px">
+<p><b>Year 1 &mdash; the deduction.</b> The equipment is mobile §1245 business property, so under §168(k) (or §179) you may deduct 100% of its purchase price the first year &mdash; not just your 10% cash down, because your personal guarantee of the loan puts the full price &ldquo;at risk&rdquo; under §465. That deduction comes off the <i>top</i> of your income, saving tax at your highest marginal rates first. The lease income, deductible interest, and platform fee are folded in; the net is a large Year-1 business loss.</p>
+<p><b>The make-or-break gate (§469).</b> That loss only offsets your W-2/active income if you <b>materially participate</b> &mdash; the deal relies on Test 3 (&gt;100 hours and not less than anyone else). If you don&rsquo;t clear it, the losses become passive and can&rsquo;t offset wages. The opinion letter rates this &ldquo;more likely than not.&rdquo; This model assumes it holds.</p>
+<p><b>The §461(l) limit.</b> A W-2 earner can only use a business loss up to $512,000 MFJ / $256,000 single against other income in one year (2026). Any excess isn&rsquo;t lost &mdash; it becomes a Net Operating Loss (NOL) carried forward, usable at up to 80% of income per year under §172. The tool tracks this automatically.</p>
+<p><b>Every year you hold it &mdash; the income.</b> The equipment earns lease income (net of the program&rsquo;s insurance, maintenance, and subscription fees). After the deductible interest, that&rsquo;s taxable income that adds a little tax back each year.</p>
+<p><b>The year you exit &mdash; the recapture.</b> Depreciation is a deferral, not a gift. At the Year-6 buyback (a 56% floor), §1245 recaptures the depreciation as <i>ordinary income</i>, stacked on that year&rsquo;s income. Under 100% bonus your basis is zero, so the entire buyback is recaptured. If you&rsquo;re still high-income that year, it stacks into your top brackets &mdash; which is why <b>exit-year income is the single biggest lever</b> you control.</p>
+<p><b>Kept simple on purpose.</b> This is federal income tax only. It does <i>not</i> model <b>state income tax</b> (many states do not conform to federal bonus depreciation &mdash; which can substantially reduce the state-level benefit), self-employment tax, NIIT, AMT, or QBI, and it doesn&rsquo;t model reinvesting the tax savings (the program&rsquo;s time-value case). Use it to understand the <i>shape</i> of the tax effect, then confirm the dollars with your CPA.</p>
+</div></details>
+</div>
+
+<div class="card">
+<h2>Your Inputs</h2>
+<p class="csub">Everything here is editable. Click the blue <span class="ttip" data-tip="Click any blue circle for a plain-English explanation.">i</span> marks for help. Brackets, the standard deduction, and the §461(l) loss cap all adjust to your filing status.</p>
+
+<div class="sectlabel">1 · Your Tax Picture</div>
+<div class="inputs-grid">
+ <div class="field"><label>Filing status</label>
+  <div class="toggle" id="statusToggle"><button data-s="mfj" class="active">Married Filing Jointly</button><button data-s="single">Single</button></div>
+  <div class="hint">Sets 2026 brackets, standard deduction (<span id="hintStd">$32,200</span>), and the §461(l) cap (<span id="hintEbl">$512,000</span>).</div></div>
+ <div class="field"><label>Personal deductions ($) <span class="ttip" data-tip="Your standard deduction OR itemized total, whichever is larger. Separate from the equipment depreciation, which the model handles on its own.">i</span></label>
+  <input type="number" id="i_persded" value="32200"><div class="hint">Defaults to the standard deduction; replace with your itemized total if you itemize.</div></div>
+</div>
+<div class="sectlabel">Active income by year — <span style="text-transform:none;font-weight:600;color:#5b6b80">your total income BEFORE deductions (W-2, business, etc.). Lower a later year to model exiting in a low-income (e.g. retirement) year.</span></div>
+<p class="hint" style="margin:0 0 8px">Enter income for each year you hold the equipment (6-year default horizon). The exit-year figure drives how hard the recapture is taxed.</p>
+<div class="income-grid" id="incomeGrid"></div>
+
+<div class="sectlabel">2 · The Deal</div>
+<div class="inputs-grid">
+ <div class="field"><label>Equipment value ($) <span class="ttip" data-tip="The purchase price of the equipment — your full depreciable basis. The whole amount can be depreciated even though you finance most of it.">i</span></label><input type="number" id="i_price" value="500000"><div class="hint">Full depreciable basis.</div></div>
+ <div class="field"><label>Down payment % <span class="ttip" data-tip="Your cash equity into the deal. The lender (e.g. Liberty FCU) finances the rest, recourse to your LLC.">i</span></label><input type="number" id="i_down" value="0.10" step="0.01"><div class="hint">Cash down. Decimal: 0.10 = 10%.</div></div>
+ <div class="field"><label>Depreciation method <span class="ttip" data-tip="100% BONUS (§168(k)): the whole cost is written off in Year 1 — biggest Year-1 shelter, full recapture at exit. MACRS: the deduction is spread over the 5-year recovery table, leaving basis behind and usually a smaller recapture. Toggle to compare — the card below shows both.">i</span></label>
+  <div class="toggle" id="depToggle"><button data-d="bonus" class="active">100% Bonus (§168k)</button><button data-d="macrs">MACRS</button></div>
+  <div class="hint">Bonus = full Year-1 write-off. MACRS (5-yr) schedule appears below.</div></div>
+ <div class="field"><label>Loan interest rate <span class="ttip" data-tip="The rate on the financed portion. The interest is deductible each year; the principal is not. The signed packet shows 6.75% on a 10-year amortization; your actual rate depends on credit and market conditions.">i</span></label><input type="number" id="i_noterate" value="0.0675" step="0.0025"><div class="hint">Decimal: 0.0675 = 6.75% (the packet's stated rate).</div></div>
+ <div class="field"><label>Loan amortization (years) <span class="ttip" data-tip="The term the loan amortizes over. If you exit before the term ends, the remaining balance is paid off at the buyback.">i</span></label><input type="number" id="i_amort" value="10" step="1"><div class="hint">Fully-amortizing term (default 10 years).</div></div>
+ <div class="field"><label>Platform fee % <span class="ttip" data-tip="The 3% platform fee, invoiced at closing, separate from your 10% down payment (signed packet). Your out-of-pocket at closing is 10% down + 3% platform = 13% of the equipment value. Any loan origination/admin fees are typically financed. This model deducts the platform fee as a Year-1 business expense (a directional choice — confirm with your CPA). Raise this % if your loan carries additional upfront costs.">i</span></label><input type="number" id="i_fee" value="0.03" step="0.0025"><div class="hint">Platform fee on the equipment value, upfront. Decimal: 0.03 = 3%.</div></div>
+ <div class="field"><label>Exit year (buyback / recapture) <span class="ttip" data-tip="The year the equipment is bought back and the depreciation is recaptured. The program's typical horizon is 6 years.">i</span></label><input type="number" id="i_exit" value="6" min="2" max="8"><div class="hint">When you exit. Default 6-year horizon.</div></div>
+ <div class="field"><label>Year-6 buyback (% of value) <span class="ttip" data-tip="The buyback price at exit as a percentage of the original equipment value. The program's floor has been described around 56%. This drives both the sale proceeds and the recapture.">i</span></label><input type="number" id="i_buyback" value="0.56" step="0.01"><div class="hint">Exit value = this % × equipment value. Decimal: 0.56 = 56%.</div></div>
+</div>
+
+<div id="depSchedWrap" style="display:none">
+ <div class="sectlabel" style="margin-top:0">MACRS depreciation schedule — % of value deducted each year <span class="ttip" data-tip="Each box is the % of the equipment value depreciated that year. Defaults to the 5-year MACRS table (200% declining balance, half-year convention) — typical for construction/earthmoving equipment. Editable; the total should be ~100%. Basis not yet taken when you exit reduces the recapture.">i</span></div>
+ <p class="hint" style="margin:0 0 6px">Editable. Use a preset or type your own. Any basis not yet depreciated when you exit reduces the recapture.</p>
+ <div class="presetbtns"><button data-preset="m5">5-year MACRS</button><button data-preset="m7">7-year MACRS</button><button data-preset="sl">Straight-line (5-yr)</button></div>
+ <div class="depsched" id="depSchedGrid"></div>
+</div>
+
+<div class="sectlabel">3 · The Rental Operation</div>
+<div class="inputs-grid">
+ <div class="field"><label>Annual lease income ($/year) <span class="ttip" data-tip="The program's projected net rental income: the signed packet states $11,050/month per $1,000,000 of equipment (about 13.26%/year), already NET of insurance, maintenance, and the T3 subscription fee. It auto-scales when you change the equipment value. Equipment Zone targets but does NOT guarantee this income — model a lower figure to stress-test. It services the loan and adds taxable income in Years 2+.">i</span></label><input type="number" id="i_lease" value="66300"><div class="hint">Net of all fees. Auto-set to $11,050/mo per $1M (packet). Not guaranteed — editable.</div></div>
+</div>
+</div>
+
+<div class="tabnav">
+<button class="tabbtn active" data-p="model">Tax Modeling</button>
+<button class="tabbtn" data-p="waterfall">Tax Waterfall</button>
+<button class="tabbtn" data-p="loan">Loan &amp; Exit</button>
+</div>
+
+<div class="page active" id="model">
+<div class="card">
+<h2>Headline Tax Outcomes <span style="font-size:12px;font-weight:600;color:#23568f">— click any box to see how it was built</span></h2>
+<p class="csub">The whole story in six numbers. Green = money in your pocket; red = tax you owe. <b>Click a box</b> for a step-by-step breakdown.</p>
+<p id="blankHint" style="color:#b7791f;font-weight:600;margin:0 0 12px;display:none">&#8593; Enter your active income above to populate these numbers.</p>
+<div class="metrics" id="headlineMetrics"></div>
+</div>
+<div class="card cmpcard">
+<h2>Bonus vs MACRS — side by side <span style="font-size:12px;font-weight:600;color:#23568f">— same inputs, both methods</span></h2>
+<p class="csub">Bonus front-loads the entire write-off (biggest Year-1 shelter, full recapture at exit); MACRS spreads it and leaves basis behind, usually a smaller recapture. The toggle above sets which one drives the rest of the tool; this card always shows both.</p>
+<div id="cmpCard"></div>
+</div>
+<div class="card">
+<h3>Year-by-Year Federal Tax</h3>
+<p class="exp">Grey bars are the tax you&rsquo;d pay with <b>no deal</b>; blue bars are your tax <b>with the equipment</b> (in the exit year the blue bar includes the recapture, so it spikes). The <b>dark navy line</b> is the net tax effect <b>each year</b> (saving = +, cost = &minus;). The <b>amber dashed line</b> is the <b>cumulative</b> net effect &mdash; the running total across all years &mdash; so you can see, at any year, whether the deal is still ahead or has been overtaken by the recapture.</p>
+<div class="svgwrap" id="yearChartSvg"></div>
+</div>
+<div class="card">
+<h3>Cash flow over the hold — waterfall</h3>
+<p class="exp">Every cash movement, in order: your cash <b>down</b> (out), then each year&rsquo;s tax saving plus operating cash (the exit year also folds in the net sale), and the final <b>all-in</b> bar. Green bars add cash, red bars take it away; the navy bar is where you end up.</p>
+<div class="svgwrap" id="waterfallSvg"></div>
+</div>
+<div class="card">
+<h3>The time-value case — reinvesting the Year-1 savings</h3>
+<p class="exp">The program&rsquo;s core argument: bank the big Year-1 tax saving and invest it. The grey line holds it as cash; the green line reinvests it at your assumed rate. If the green line clears the red <b>recapture</b> line by exit, the reinvested savings alone cover the tax you owe at the buyback &mdash; the &ldquo;kick the can, then pay it from growth&rdquo; case.</p>
+<div class="field" style="max-width:220px;margin-bottom:8px"><label>Reinvestment rate %</label><input type="number" id="i_reinvest" value="0.05" step="0.01"><div class="hint">Assumed annual return on the banked savings. Decimal: 0.05 = 5%.</div></div>
+<div class="svgwrap" id="reinvestSvg"></div>
+</div>
+<div class="card">
+<h2>Year-by-Year Detail</h2>
+<p class="csub">Every line the model computes. The exit year is highlighted. Hover the <span class="ttip" data-tip="Row labels with this icon have a description.">i</span> on a row label for what it means, and click any <u>underlined number</u> for the calculation.</p>
+<div style="overflow-x:auto"><table class="dataTable" id="yearlyTable"></table></div>
+</div>
+</div>
+
+<div class="page" id="waterfall">
+<div class="card">
+<h2>Tax Waterfall — Where Your Dollars Land in the Brackets</h2>
+<p class="csub">Two &ldquo;bracket walks&rdquo;: how your Year-1 deduction saves tax (walking <i>down</i> from the top of your income), and how the exit-year recapture costs tax (stacking <i>up</i> on top of your income). Both on taxable income, so the savings shown are real.</p>
+<h3>① Year-1 Bracket Walk — your deduction, and the real tax it saves</h3>
+<p class="exp">The top bar is your Year-1 taxable income with <b>no deal</b>; the bottom bar is with the equipment. The brackets that vanish are your deduction — and because they are the <b>top</b> (highest-rate) brackets, that is where the big saving comes from.</p>
+<div class="svgwrap" id="y1WalkSvg"></div>
+<div id="y1WalkSummary" class="walk-note"></div>
+<div style="overflow-x:auto;margin-top:10px"><table class="bd" id="y1WalkTable"></table></div>
+</div>
+<div class="card">
+<h3>② Exit-Year Bracket Walk — the recapture, and what it costs</h3>
+<p class="exp">The top bar is your exit-year taxable income <b>without</b> the recapture; the bottom bar adds the recapture on top — pushing you into darker, higher-rate brackets. <b>Lower your exit-year income</b> (a retirement year) and the recapture falls into cheaper brackets.</p>
+<div class="svgwrap" id="exitWalkSvg"></div>
+<div id="exitWalkSummary" class="walk-note"></div>
+<div style="overflow-x:auto;margin-top:10px"><table class="bd" id="exitWalkTable"></table></div>
+</div>
+<div class="card">
+<h3>The arbitrage — deduct high, recapture low?</h3>
+<p class="exp">A deferral only &ldquo;wins&rdquo; on taxes if the rate you <b>deduct</b> at exceeds the rate you <b>recapture</b> at. The biggest lever you control is the <i>exit-year income</i>: exiting in a low-income year pushes the recapture into cheaper brackets and flips the spread in your favor.</p>
+<div class="metrics" id="arbMetrics"></div>
+</div>
+</div>
+
+<div class="page" id="loan">
+<div class="card">
+<h2>The Loan &amp; The Exit</h2>
+<p class="csub">The loan fully amortizes over its term. Two things to understand: how the balance pays down, and what the Year-6 buyback nets you after the recapture and the remaining loan payoff.</p>
+<div class="metrics" id="loanTiles" style="margin-bottom:16px"></div>
+<h3>Loan balance over time</h3>
+<p class="exp">The financed balance amortizes down over the term. At your exit year the <b>remaining balance</b> is paid off out of the buyback proceeds — the shorter your hold vs. the amortization term, the more balance is left to settle.</p>
+<div class="svgwrap" id="loanBalSvg"></div>
+<h3 style="margin-top:16px">Loan Amortization Schedule</h3>
+<p class="exp">Each year: opening balance, the payment, and how it splits between deductible <b>interest</b> and non-deductible <b>principal</b>. Interest is high early and falls as the balance drops.</p>
+<div style="overflow-x:auto"><table class="dataTable" id="loanSchedule"></table></div>
+</div>
+<div class="card">
+<h3>Net cash at exit, by buyback value</h3>
+<p class="exp">For your exit year, what you net from the buyback at each possible value: proceeds, minus the loan balance you still owe, minus the recapture tax. A higher buyback brings more recapture — the recapture eats much of any premium. The table shows the math behind each bar.</p>
+<div class="svgwrap" id="exitChartSvg"></div>
+<div style="overflow-x:auto;margin-top:10px"><table class="dataTable" id="exitTable"></table></div>
+</div>
+</div>
+
+<div class="card">
+<h2>Tax Authority &amp; Citations — the code behind every number</h2>
+<p class="csub">Built on current federal law. Items marked (assumption) are positions the DEAL takes that the model adopts but does not itself prove.</p>
+<details><summary>Show the authority behind each computation</summary>
+<div style="overflow-x:auto;margin-top:10px"><table class="dataTable">
+<thead><tr><th>What the model computes</th><th>Authority</th><th>How the model applies it</th></tr></thead><tbody>
+<tr><td>2026 brackets &amp; standard deduction</td><td>IRS Rev. Proc. 2025-32</td><td>Exact 2026 bracket schedules; standard deduction $16,100 / $32,200.</td></tr>
+<tr><td>100% first-year depreciation (Year 1)</td><td>IRC §168(k) bonus &amp; IRC §179; OBBBA (P.L. 119-21)</td><td>Full equipment cost deducted in the year placed in service. The deal qualifies under both §179 expensing and §168(k) 100% bonus; this model uses the §168(k) mechanism (no dollar cap or taxable-income limit). Heavy construction equipment is mobile §1245 personal property per the opinion letter.</td></tr>
+<tr><td>MACRS depreciation (alternative)</td><td>IRC §167, §168(a)&#8211;(e); Rev. Proc. 87-57</td><td>5-year 200% declining balance, half-year convention (typical for construction/earthmoving equipment); editable schedule. Basis not yet recovered at exit stays as adjusted basis.</td></tr>
+<tr><td>Non-passive losses via material participation <i>(assumption)</i></td><td>IRC §469; Treas. Reg. §1.469-5T(a)(3) — Test 3</td><td>The deduction offsets W-2/active income only if you materially participate (&gt;100 hours and not less than any other individual). The deal's opinion letter (B. Jensen, 4/30/2026) concludes this is &ldquo;more likely than not,&rdquo; relying on Test 3 and the extraordinary-personal-services rental exception. The model assumes it is satisfied and documented.</td></tr>
+<tr><td>At-risk basis <i>(assumption)</i></td><td>IRC §465</td><td>Assumes the loan is recourse to your LLC, putting the full equipment cost at risk — the basis for deducting the full price, not just cash down.</td></tr>
+<tr><td>Excess Business Loss cap</td><td>IRC §461(l) — $512,000 MFJ / $256,000 single (Rev. Proc. 2025-32)</td><td>Loss allowed against other income = min(net loss, threshold); the excess converts to an NOL.</td></tr>
+<tr><td>NOL carryforward limit</td><td>IRC §172(a)(2)</td><td>A carried-forward NOL offsets at most 80% of a year's taxable income.</td></tr>
+<tr><td>Depreciation recapture</td><td>IRC §1245</td><td>At the buyback, prior depreciation is recaptured as ordinary income = min(gain, depreciation taken), stacked on the exit-year return.</td></tr>
+<tr><td>Adjusted basis on sale</td><td>IRC §1011, §1016</td><td>Adjusted basis = cost − depreciation taken. Gain = buyback − adjusted basis; drives the §1245 recapture. Bonus → basis 0; MACRS → remaining basis lowers the recapture.</td></tr>
+<tr><td>Proceeds above cost → capital gain</td><td>IRC §1(h); §1231</td><td>Any buyback above original cost is taxed at 0/15/20% capital-gains rates (rare — the buyback is normally below cost).</td></tr>
+<tr><td>Deductible interest</td><td>IRC §163</td><td>Loan interest is deducted each year as a business expense; principal is not deductible.</td></tr>
+<tr><td>Platform fee <i>(assumption)</i></td><td>IRC §162</td><td>The 3% platform fee (invoiced at closing, separate from the down payment) is deducted as a Year-1 business expense in this model. It could instead be a §195 startup cost or a capitalized amount — confirm with your CPA.</td></tr>
+</tbody></table></div>
+</details>
+</div>
+
+<div class="card gloss">
+<h2>Glossary — every term used in this tool</h2>
+<dl>
+<dt>Bonus depreciation (§168(k))</dt><dd>A deduction equal to 100% of the equipment&rsquo;s cost, taken in the year it&rsquo;s placed in service. OBBBA made 100% permanent for property placed in service after 1/19/2025. The deal also qualifies for §179 expensing.</dd>
+<dt>MACRS</dt><dd>The alternative to bonus: the cost is recovered over a fixed schedule (here the 5-year, 200% declining-balance, half-year table typical for construction equipment) instead of all in Year 1. Leaves basis behind, so a smaller recapture at exit.</dd>
+<dt>Material participation (§469)</dt><dd>For the losses to offset your wages (non-passive), you must materially participate. The deal relies on Test 3 — more than 100 hours and not less than any other individual. The opinion letter rates this &ldquo;more likely than not.&rdquo;</dd>
+<dt>At-risk basis (§465)</dt><dd>You can only deduct losses up to the amount you have &ldquo;at risk.&rdquo; Your personal guarantee of the recourse loan puts the full equipment cost at risk — the basis for deducting the whole price, not just your cash down.</dd>
+<dt>§1245 recapture</dt><dd>On the sale/buyback of depreciated equipment, the depreciation you took is taxed back as <b>ordinary income</b>, stacked on that year&rsquo;s income. Unavoidable on a taxable sale.</dd>
+<dt>Adjusted basis (§1011/§1016)</dt><dd>Cost minus depreciation taken. Gain = buyback − adjusted basis; it drives the recapture. Under 100% bonus the basis is $0, so the whole buyback is recaptured.</dd>
+<dt>Excess Business Loss cap (§461(l))</dt><dd>The most a business loss can offset against your other income in one year — $512,000 MFJ / $256,000 single (2026). The excess becomes an NOL.</dd>
+<dt>NOL carryforward (§172)</dt><dd>A loss you couldn&rsquo;t use this year, carried forward — limited to offsetting 80% of a year&rsquo;s taxable income. This tool tracks and draws it down automatically.</dd>
+<dt>Lease income</dt><dd>The rental income the equipment earns through the program, <b>net</b> of insurance, maintenance, and the platform subscription fee. The program targets ~$11,050/month per $1M of equipment but does not guarantee it.</dd>
+<dt>Amortizing loan &amp; balloon</dt><dd>The loan amortizes over ~10 years but the program term is 6 years, so a balance remains at exit — paid off out of the buyback proceeds.</dd>
+<dt>Buyback (56% floor)</dt><dd>At 72 months, the operating partner repurchases the equipment at a contractual floor of 56% of the original price. This is your exit value and it triggers the recapture.</dd>
+<dt>Bracket walk</dt><dd>A picture of which tax brackets a deduction (walking down from the top of your income) or income (stacking up) falls into.</dd>
+</dl>
+</div>
+
+<div class="card gloss">
+<h2>What this tool deliberately leaves out</h2>
+<p class="csub"><b>Federal income tax only.</b> <b>State income tax is not modeled</b> — many states do not conform to federal bonus depreciation, so residents of a non-conforming state need a separate state schedule (your CPA handles that). Also not modeled: <b>self-employment tax</b>, <b>§1411 NIIT</b>, <b>AMT</b>, and <b>§199A QBI</b>. The material-participation (§469) and at-risk (§465) positions are assumptions the deal takes. If you sell above cost, capital-gains treatment applies to the excess. Reinvestment/compounding of the tax savings is not modeled (the deal's time-value case). <b>Use this to understand the SHAPE of the tax effect, then confirm the dollars with your own CPA.</b></p>
+</div>
+
+</div>
+
+<div id="verBadge" title="Release notes — click for details">HM Tax App  v1.0</div>
+<div id="modalBg"><div id="modalBox"><span class="x" onclick="document.getElementById('modalBg').style.display='none'">×</span><div id="modalBody"></div></div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const g=id=>parseFloat(($(id)||{}).value)||0;
+const fU=n=>(n<0?'-$':'$')+Math.round(Math.abs(n)).toLocaleString();
+const fUk=n=>(n<0?'-$':'$')+Math.round(Math.abs(n)/1000).toLocaleString()+'K';
+const fP=n=>(n*100).toFixed(1)+'%';
+const BR={
+ mfj:[[0,24800,.10],[24800,100800,.12],[100800,211400,.22],[211400,403550,.24],[403550,512450,.32],[512450,768600,.35],[768600,1e15,.37]],
+ single:[[0,12400,.10],[12400,50400,.12],[50400,105700,.22],[105700,201775,.24],[201775,256225,.32],[256225,640600,.35],[640600,1e15,.37]]
+};
+const STD={mfj:32200,single:16100}, EBL={mfj:512000,single:256000};
+const CG={mfj:[98900,613700],single:[49450,545500]};
+const RC={'0.10':'#94a3b8','0.12':'#7dd3fc','0.22':'#38bdf8','0.24':'#0ea5e9','0.32':'#2563eb','0.35':'#1d4ed8','0.37':'#1e3a8a'};
+const MACRS_PRESETS={m5:[.20,.32,.192,.1152,.1152,.0576],m7:[.1429,.2449,.1749,.1249,.0893,.0892,.0893,.0446],sl:[.10,.20,.20,.20,.20,.10]};
+let DEPSCHED=MACRS_PRESETS.m5.slice();
+const MAXY=8;
+let STATUS='mfj', DEPMETHOD='bonus';
+function tax(ti,s){if(ti<=0)return 0;let t=0;for(const b of BR[s])if(ti>b[0])t+=(Math.min(ti,b[1])-b[0])*b[2];return t;}
+function ltcgTax(baseTI,gain,s){if(gain<=0)return 0;const bp=CG[s];const tiers=[[bp[0],0],[bp[1],0.15],[1e15,0.20]];let lo=Math.max(0,baseTI),rem=gain,t=0;for(const[c,r]of tiers){if(rem<=0)break;const seg=Math.max(0,Math.min(c,lo+rem)-lo);if(seg>0){t+=seg*r;rem-=seg;lo+=seg;}}return t;}
+function amortYear(P,annualRate,amortYears,heldYears){
+ const im=annualRate/12, n=Math.max(1,Math.round(amortYears*12));
+ const pmt= im>0 ? P*(im*Math.pow(1+im,n))/(Math.pow(1+im,n)-1) : P/n;
+ let bal=P; const out=[];
+ for(let y=1;y<=heldYears;y++){let openBal=bal,iy=0,py=0;
+  for(let m=0;m<12;m++){if(bal<=0)break;const i=bal*im;let pr=pmt-i;if(pr>bal)pr=bal;iy+=i;py+=pr;bal-=pr;}
+  out.push({y,openBal,interest:iy,principal:py,closeBal:bal,payment:iy+py});}
+ return {pmt,years:out};
+}
+function readInputs(){const nn=v=>Math.max(0,v||0),pct=v=>{v=v||0;if(v>1)v=v/100;return Math.max(0,v);};
+ const w2=[];for(let y=1;y<=MAXY;y++)w2.push(nn(g('i_w2_'+y)));
+ const dsc=[];for(let i=1;i<=MAXY;i++){const e=$('dep_'+i);dsc.push(Math.max(0,(parseFloat(e&&e.value)||0)/100));}
+ return{status:STATUS,depMethod:DEPMETHOD,depSched:dsc,w2,persded:nn(g('i_persded')),price:nn(g('i_price')),
+  down:Math.min(1,pct(g('i_down'))),noteRate:Math.min(0.5,pct(g('i_noterate'))),amortYears:Math.max(1,Math.min(30,Math.round(g('i_amort')||10))),
+  fee:Math.min(0.5,pct(g('i_fee'))),platformFee:0,origFee:0,
+  exit:Math.max(2,Math.min(MAXY,Math.round(g('i_exit')||6))),buybackPct:Math.min(3,pct(g('i_buyback'))),lease:nn(g('i_lease')),reinvest:Math.min(0.5,pct(g('i_reinvest')))};}
+function runModel(inp){
+ const s=inp.status, loanP=inp.price*(1-inp.down), persDed=Math.max(STD[s],inp.persded);
+ const feePct=(inp.fee!=null?inp.fee:(inp.platformFee+inp.origFee));
+ const am=amortYear(loanP,inp.noteRate,inp.amortYears,inp.exit);
+ const years=[]; let nol=0, accum=0;
+ for(let y=1;y<=MAXY;y++){
+  const before=y<=inp.exit, isExit=y===inp.exit, gross=inp.w2[y-1];
+  const sqTI=Math.max(0,gross-persDed), sqTax=tax(sqTI,s);
+  const lease=before?inp.lease:0;
+  const A=before?am.years[y-1]:{interest:0,principal:0,openBal:0,closeBal:0,payment:0};
+  const interest=A.interest, principal=A.principal, loanPmt=A.payment;
+  let dep=before?((inp.depMethod==='macrs')?inp.price*(inp.depSched[y-1]||0):(y===1?inp.price:0)):0;
+  if(accum+dep>inp.price)dep=Math.max(0,inp.price-accum);
+  accum+=dep;
+  const feeDed=(y===1)?inp.price*feePct:0;
+  const schedC=lease-interest-dep-feeDed;
+  let dealTIpre,nolUsed=0,eblExcess=0,negNOL=0;
+  if(schedC<0){const loss=-schedC,allowed=Math.min(loss,EBL[s]);eblExcess=loss-allowed;dealTIpre=sqTI-allowed;negNOL=Math.max(0,-dealTIpre);nol+=eblExcess+negNOL;}
+  else{const tent=sqTI+schedC;nolUsed=Math.min(nol,0.8*tent);dealTIpre=tent-nolUsed;nol-=nolUsed;}
+  const dealTI=Math.max(0,dealTIpre),dealTax=tax(dealTI,s),taxSav=sqTax-dealTax;
+  const opsCash=before?(lease-loanPmt-feeDed):0;
+  let recapInc=0,ltcgGain=0,sec1231Loss=0,recapTax=0,ltcgTaxAmt=0,lossBenefit=0,payoff=0,netSale=0,adjBasis=0,accumDep=0,proceeds=0;
+  if(isExit){
+   proceeds=inp.buybackPct*inp.price; accumDep=accum; adjBasis=Math.max(0,inp.price-accumDep);
+   const gain=proceeds-adjBasis;
+   recapInc=Math.max(0,Math.min(gain,accumDep));
+   ltcgGain=Math.max(0,proceeds-inp.price);
+   sec1231Loss=Math.max(0,-gain);
+   recapTax=tax(dealTI+recapInc,s)-tax(dealTI,s);
+   ltcgTaxAmt=ltcgTax(dealTI+recapInc,ltcgGain,s);
+   lossBenefit=sec1231Loss>0?(tax(dealTI,s)-tax(Math.max(0,dealTI-sec1231Loss),s)):0;
+   payoff=A.closeBal; netSale=proceeds-recapTax-ltcgTaxAmt+lossBenefit-payoff;
+  }
+  years.push({y,gross,sqTI,sqTax,lease,interest,principal,loanPmt,openBal:A.openBal,closeBal:A.closeBal,dep,feeDed,accumDep,adjBasis,schedC,nol,nolUsed,eblExcess,negNOL,dealTI,dealTax,taxSav,opsCash,isExit,proceeds,recapInc,ltcgGain,ltcgTaxAmt,sec1231Loss,lossBenefit,recapTax,payoff,netSale});
+ }
+ return{inp,years,loanP,persDed,pmt:am.pmt,feePct};
+}
+function walkDown(baseTI,ded,s){const out=[];let rem=ded;for(let i=BR[s].length-1;i>=0;i--){const b=BR[s][i];const inBkt=Math.max(0,Math.min(baseTI,b[1])-b[0]);const c=Math.min(inBkt,rem);out.push({b,cons:c});rem-=c;if(rem<=0)break;}return out;}
+function spreadBdHTML(bL,bTI,aL,aTI,s,diffL,costMode){
+ let h='<thead><tr><th>Bracket</th><th>'+bL+' income</th><th>'+bL+' tax</th><th>'+aL+' income</th><th>'+aL+' tax</th><th>'+diffL+'</th></tr></thead><tbody>';
+ let TbI=0,TbT=0,TaI=0,TaT=0,Td=0;
+ for(const b of BR[s]){const bi=Math.max(0,Math.min(bTI,b[1])-b[0]),ai=Math.max(0,Math.min(aTI,b[1])-b[0]);if(bi<=0&&ai<=0)continue;
+  const bt=bi*b[2],at=ai*b[2];const d=costMode?(at-bt):(bt-at);TbI+=bi;TbT+=bt;TaI+=ai;TaT+=at;Td+=d;
+  h+='<tr><td>'+(b[2]*100).toFixed(0)+'%</td><td>'+fU(bi)+'</td><td>'+fU(bt)+'</td><td>'+fU(ai)+'</td><td>'+fU(at)+'</td><td style="font-weight:700;color:'+(costMode?'#b91c1c':'#15803d')+'">'+fU(d)+'</td></tr>';}
+ h+='<tr class="total-row"><td>Total</td><td>'+fU(TbI)+'</td><td>'+fU(TbT)+'</td><td>'+fU(TaI)+'</td><td>'+fU(TaT)+'</td><td style="color:'+(costMode?'#b91c1c':'#15803d')+'">'+fU(Td)+'</td></tr></tbody>';return h;}
+// SVG bracket-walk: two horizontal bars (before/after) split by bracket
+function bracketSvg(topLabel,topTI,botLabel,botTI,s){
+ const W=680,H=200,padL=124,padR=16,padT=12,padB=30,plotW=W-padL-padR,plotH=H-padT-padB,rowH=44,gap=18;
+ const rawMax=Math.max(topTI,botTI,1);
+ const step=rawMax>400000?100000:rawMax>150000?50000:rawMax>60000?25000:10000;
+ const axMax=Math.max(step,Math.ceil(rawMax/step)*step);
+ const xs=v=>padL+v/axMax*plotW;
+ let h='<svg viewBox="0 0 '+W+' '+H+'" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">';
+ for(let v=0;v<=axMax+1;v+=step){const x=xs(v);h+='<line x1="'+x.toFixed(1)+'" y1="'+padT+'" x2="'+x.toFixed(1)+'" y2="'+(padT+plotH)+'" stroke="#e9eef5"/><text x="'+x.toFixed(1)+'" y="'+(padT+plotH+15)+'" text-anchor="middle" font-size="9.5" fill="#8a97a8">$'+(v/1000).toFixed(0)+'K</text>';}
+ function segs(ti){const out=[];for(const b of BR[s]){const seg=Math.max(0,Math.min(ti,b[1])-b[0]);if(seg>0)out.push([seg,RC[b[2].toFixed(2)]||'#38bdf8',(b[2]*100).toFixed(0)+'%']);}return out;}
+ function bar(rowY,label,ti){let x=padL;let hh='<text x="'+(padL-8)+'" y="'+(rowY+rowH/2+4)+'" text-anchor="end" font-size="11" font-weight="700" fill="#33425a">'+label+' &mdash; '+fUk(ti)+'</text>';for(const[seg,col,rt] of segs(ti)){const w=seg/axMax*plotW;hh+='<rect x="'+x.toFixed(1)+'" y="'+rowY+'" width="'+Math.max(0.4,w).toFixed(1)+'" height="'+rowH+'" fill="'+col+'"><title>'+rt+' bracket: '+fU(seg)+'</title></rect>';if(w>30)hh+='<text x="'+(x+w/2).toFixed(1)+'" y="'+(rowY+rowH/2+4)+'" text-anchor="middle" font-size="9.5" fill="#fff" font-weight="700">'+rt+'</text>';x+=w;}return hh;}
+ h+=bar(padT+8,topLabel,topTI)+bar(padT+8+rowH+gap,botLabel,botTI)+'</svg>';return h;
+}
+function barChart3(items){
+ const W=680,H=210,padL=48,padR=16,padT=16,padB=30,plotW=W-padL-padR,plotH=H-padT-padB;
+ const maxV=Math.max(1,...items.map(i=>Math.abs(i.value)));
+ const step=maxV>100000?25000:maxV>40000?10000:maxV>15000?5000:2000;
+ const axMax=Math.max(step,Math.ceil(maxV/step)*step);const bw=plotW/items.length;
+ let h='<svg viewBox="0 0 '+W+' '+H+'" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">';
+ for(let v=0;v<=axMax+1;v+=step){const y=padT+plotH-v/axMax*plotH;h+='<line x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+y.toFixed(1)+'" stroke="#eef2f7"/><text x="'+(padL-4)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" font-size="9" fill="#8a97a8">$'+(v/1000).toFixed(0)+'K</text>';}
+ items.forEach((it,i)=>{const bh=Math.abs(it.value)/axMax*plotH;const x=padL+i*bw+bw*0.22;const w=bw*0.56;const y=padT+plotH-bh;h+='<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+w.toFixed(1)+'" height="'+bh.toFixed(1)+'" fill="'+it.color+'"><title>'+it.label+': '+fU(it.value)+'</title></rect><text x="'+(x+w/2).toFixed(1)+'" y="'+(y-4).toFixed(1)+'" text-anchor="middle" font-size="10" font-weight="700" fill="#33425a">'+fUk(it.value)+'</text><text x="'+(x+w/2).toFixed(1)+'" y="'+(padT+plotH+14)+'" text-anchor="middle" font-size="10" fill="#5b6b80">'+it.label+'</text>';});
+ h+='</svg>';return h;
+}
+
+let LAST=null;
+function render(){
+ const inp=readInputs(), M=runModel(inp), Y=M.years, s=inp.status, S=Y[inp.exit-1], y1=Y[0];
+ LAST={inp,M};
+ $('hintStd').textContent=fU(STD[s]); $('hintEbl').textContent=fU(EBL[s]);
+ const cumSav=Y.slice(0,inp.exit).reduce((a,b)=>a+b.taxSav,0);
+ const cumOps=Y.slice(0,inp.exit).reduce((a,b)=>a+b.opsCash,0);
+ const down=inp.down*inp.price;
+ const exitTax=S.recapTax+S.ltcgTaxAmt-S.lossBenefit;
+ const netTax=cumSav-exitTax;
+ const allIn=cumSav+cumOps+S.netSale-down;
+ const dedApplied=y1.sqTI-y1.dealTI, recRate=S.recapInc?S.recapTax/S.recapInc:0, dedRate=dedApplied?y1.taxSav/dedApplied:0;
+ const depNote=inp.depMethod==='macrs'?('MACRS Yr-1 '+fU(y1.dep)+' of '+fU(inp.price)):('100% bonus on '+fU(inp.price));
+ $('blankHint').style.display=(inp.w2.reduce((a,b)=>a+b,0)>0)?'none':'block';
+ $('headlineMetrics').innerHTML=
+  '<div class="metric green" data-m="y1"><span class="seehow">see how &#9656;</span><div class="k">Year-1 federal tax saving</div><div class="v">'+fU(y1.taxSav)+'</div><div class="n">'+depNote+'; blended '+fP(dedRate)+'</div></div>'+
+  '<div class="metric green" data-m="cum"><span class="seehow">see how &#9656;</span><div class="k">Cumulative saving to exit</div><div class="v">'+fU(cumSav)+'</div><div class="n">net of taxable lease income, Y1&#8211;Y'+inp.exit+'</div></div>'+
+  '<div class="metric red" data-m="recap"><span class="seehow">see how &#9656;</span><div class="k">Recapture tax at exit (Y'+inp.exit+')</div><div class="v">'+fU(S.recapTax)+'</div><div class="n">on '+fU(S.recapInc)+' recapture; blended '+fP(recRate)+'</div></div>'+
+  '<div class="metric '+(netTax>=0?'green':'red')+'" data-m="net"><span class="seehow">see how &#9656;</span><div class="k">Net tax outcome</div><div class="v">'+fU(netTax)+'</div><div class="n">cumulative saving &#8722; exit taxes</div></div>'+
+  '<div class="metric" data-m="ops"><span class="seehow">see how &#9656;</span><div class="k">Net operating cash to exit</div><div class="v">'+fU(cumOps)+'</div><div class="n">lease &#8722; loan payment &#8722; fees, Y1&#8211;Y'+inp.exit+'</div></div>'+
+  '<div class="metric '+(allIn>=0?'green':'red')+'" data-m="allin"><span class="seehow">see how &#9656;</span><div class="k">All-in net at exit</div><div class="v">'+fU(allIn)+'</div><div class="n">savings + ops cash + net sale &#8722; '+fU(down)+' down</div></div>';
+ document.querySelectorAll('#headlineMetrics .metric[data-m]').forEach(el=>el.onclick=()=>openModal(el.dataset.m));
+ renderYearTable(Y,inp); renderCompare(inp);
+ $('y1WalkSvg').innerHTML=bracketSvg('No deal',y1.sqTI,'With equipment',y1.dealTI,s);
+ $('y1WalkTable').innerHTML=spreadBdHTML('No deal',y1.sqTI,'With equipment',y1.dealTI,s,'Tax saved',false);
+ $('y1WalkSummary').innerHTML='Year-1 taxable income of <b>'+fU(y1.sqTI)+'</b> minus the deduction of <b>'+fU(dedApplied)+'</b> walks down to <b>'+fU(y1.dealTI)+'</b>. Because it comes off the TOP, it saves at your highest rates first — <b>'+fU(y1.taxSav)+'</b>.';
+ $('exitWalkSvg').innerHTML=bracketSvg('No recapture',S.dealTI,'With recapture',S.dealTI+S.recapInc,s);
+ $('exitWalkTable').innerHTML=spreadBdHTML('No recapture',S.dealTI,'With recapture',S.dealTI+S.recapInc,s,'Tax added',true);
+ $('exitWalkSummary').innerHTML='In Year '+inp.exit+', taxable income is <b>'+fU(S.dealTI)+'</b>. The recapture of <b>'+fU(S.recapInc)+'</b> stacks on top, costing <b>'+fU(S.recapTax)+'</b> (a '+fP(recRate)+' blended rate).';
+ $('arbMetrics').innerHTML=
+  '<div class="metric green" data-m="dedrate"><span class="seehow">see how &#9656;</span><div class="k">You deduct at (Year 1)</div><div class="v">'+fP(dedRate)+'</div><div class="n">blended rate the deduction saves</div></div>'+
+  '<div class="metric red" data-m="recrate"><span class="seehow">see how &#9656;</span><div class="k">You recapture at (Year '+inp.exit+')</div><div class="v">'+fP(recRate)+'</div><div class="n">blended rate the recapture costs</div></div>'+
+  '<div class="metric '+(dedRate-recRate>=0?'green':'red')+'" data-m="spread"><span class="seehow">see how &#9656;</span><div class="k">Arbitrage spread</div><div class="v">'+((dedRate-recRate)*100).toFixed(1)+' pts</div><div class="n">'+(dedRate-recRate>=0?'favorable':'unfavorable')+'</div></div>';
+ document.querySelectorAll('#arbMetrics .metric[data-m]').forEach(el=>el.onclick=()=>openModal(el.dataset.m));
+ $('loanTiles').innerHTML='<div class="metric" style="cursor:default"><div class="k">Loan financed</div><div class="v">'+fU(M.loanP)+'</div><div class="n">'+fP(1-inp.down)+' of the equipment value</div></div><div class="metric" style="cursor:default"><div class="k">Year-1 interest</div><div class="v">'+fU(y1.interest)+'</div><div class="n">deductible; falls as the loan amortizes</div></div><div class="metric" style="cursor:default"><div class="k">Net operating cash / yr</div><div class="v">'+fU(Y[1]?Y[1].opsCash:y1.opsCash)+'</div><div class="n">lease &#8722; loan payment (steady year)</div></div><div class="metric '+(S.payoff>0?'red':'')+'" style="cursor:default"><div class="k">Balance owed at exit (Y'+inp.exit+')</div><div class="v">'+fU(S.payoff)+'</div><div class="n">paid off from the buyback</div></div>';
+ renderLoanSchedule(inp,M); renderExitTable(inp,M); renderExitChart(inp,M); renderYearChart(inp,M); renderWaterfall(inp,M); renderReinvest(inp,M); renderLoanBalance(inp,M);
+}
+function cell(v,kind,yr){return '<span class="cellpop" data-kind="'+kind+'" data-yr="'+yr+'">'+fUk(v)+'</span>';}
+function renderYearTable(Y,inp){const t=$('yearlyTable');const N=inp.exit;const cols=Y.slice(0,Math.max(N,6));
+ let h='<thead><tr><th>Line</th>'+cols.map(y=>'<th>Y'+y.y+'</th>').join('')+'</tr></thead><tbody>';
+ const tip=t=>' <span class="ttip" data-tip="'+t+'">i</span>';
+ const row=(l,vals,o)=>{o=o||{};const cls=o.s?'section-row':(o.t?'total-row':'');h+='<tr class="'+cls+'"><td>'+l+'</td>'+vals.map((x,i)=>'<td'+(cols[i].isExit?' style="background:#fdf8ec"':'')+'>'+x+'</td>').join('')+'</tr>';};
+ row('STATUS QUO (no deal)',cols.map(()=>''),{s:1});
+ row('Active income',cols.map(y=>fUk(y.gross)));
+ row('Taxable income'+tip('Active income minus your personal deduction. Click a year for the detail.'),cols.map((y,i)=>cell(y.sqTI,'sqti',i)));
+ row('Federal tax'+tip('Progressive tax on your status-quo taxable income.'),cols.map((y,i)=>cell(y.sqTax,'sqtax',i)));
+ row('THE EQUIPMENT — each year',cols.map(()=>''),{s:1});
+ row('Annual lease income'+tip('Projected rental income from the Advantage Flex program (net). Not guaranteed.'),cols.map(y=>fUk(y.lease)));
+ row('&#8722; Loan interest'+tip('Deductible interest on the financed portion. Falls each year as the loan amortizes.'),cols.map(y=>fUk(-y.interest)));
+ row((inp.depMethod==='macrs'?'Depreciation (MACRS)':'Bonus depreciation (Year 1)')+tip(inp.depMethod==='macrs'?'MACRS depreciation from your schedule. Basis not taken by exit reduces the recapture.':'100% of cost, deducted in Year 1 under §168(k).'),cols.map(y=>fUk(-y.dep)));
+ row('&#8722; Platform fee (Year 1)'+tip('The 3% platform fee, deducted as a Year-1 business expense in this model.'),cols.map(y=>fUk(-y.feeDed)));
+ row('Net business income/(loss)'+tip('Lease income minus interest, depreciation, and fees. Flows to your return, subject to the §461(l) cap and NOL.'),cols.map(y=>fUk(y.schedC)));
+ row('Taxable income with deal'+tip('Status-quo taxable income plus this business income/(loss), after the §461(l) cap and NOL. Click for detail.'),cols.map((y,i)=>cell(y.dealTI,'dealti',i)));
+ row('Federal tax with deal'+tip('Progressive tax on taxable income WITH the equipment.'),cols.map((y,i)=>cell(y.dealTax,'dealtax',i)));
+ row('Tax saving vs no deal',cols.map(y=>fUk(y.taxSav)));
+ row('EXIT (buyback)',cols.map(()=>''),{s:1});
+ row('Buyback proceeds'+tip('The equipment buyback value at exit (buyback % × equipment value).'),cols.map(y=>fUk(y.proceeds)));
+ row('Recapture income'+tip('Depreciation recaptured as ordinary income = min(gain, depreciation taken). Bonus: basis 0 so it equals the proceeds up to cost.'),cols.map(y=>fUk(y.recapInc)));
+ row('Recapture tax'+tip('Extra tax from stacking the recapture on your exit-year income. Click the exit year for the bracket walk.'),cols.map((y,i)=>y.recapTax?cell(-y.recapTax,'recap',i):fUk(0)));
+ row('Loan payoff'+tip('The remaining loan balance paid off at the buyback.'),cols.map(y=>fUk(-y.payoff)));
+ row('Net cash from sale',cols.map(y=>fUk(y.netSale)),{t:1});
+ row('CASH FLOW',cols.map(()=>''),{s:1});
+ row('Operating cash'+tip('Lease income minus the full loan payment (interest + principal) minus Year-1 fees.'),cols.map(y=>fUk(y.opsCash)));
+ h+='</tbody>';t.innerHTML=h;
+ document.querySelectorAll('#yearlyTable .cellpop').forEach(el=>el.onclick=()=>openModal(el.dataset.kind,parseInt(el.dataset.yr)));}
+function renderCompare(inp){const el=$('cmpCard');if(!el)return;
+ const run=method=>{const M=runModel(Object.assign({},inp,{depMethod:method})),Y=M.years,S=Y[inp.exit-1];
+  const cum=Y.slice(0,inp.exit).reduce((a,b)=>a+b.taxSav,0),ops=Y.slice(0,inp.exit).reduce((a,b)=>a+b.opsCash,0),down=inp.down*inp.price;
+  return{y1:Y[0].taxSav,cum,recap:S.recapTax,allIn:cum+ops+S.netSale-down};};
+ const B=run('bonus'),X=run('macrs');const td=(v,c)=>'<td class="'+(c||'')+'">'+fU(v)+'</td>';
+ let h='<table><thead><tr><th>Measure</th><th>100% Bonus (§168k)</th><th>MACRS (5-yr)</th></tr></thead><tbody>';
+ h+='<tr><td>Year-1 tax saving</td>'+td(B.y1)+td(X.y1)+'</tr>';
+ h+='<tr><td>Cumulative saving to exit</td>'+td(B.cum)+td(X.cum)+'</tr>';
+ h+='<tr><td>Recapture tax at exit (cost)</td>'+td(B.recap)+td(X.recap)+'</tr>';
+ h+='<tr class="hl"><td>All-in net at exit</td>'+td(B.allIn,B.allIn>=0?'pos':'neg')+td(X.allIn,X.allIn>=0?'pos':'neg')+'</tr>';
+ h+='</tbody></table>';el.innerHTML=h;}
+function renderLoanSchedule(inp,M){const Y=M.years;let h='<thead><tr><th>Year</th><th>Opening balance</th><th>Payment</th><th>&nbsp;of which interest</th><th>&nbsp;of which principal</th><th>Closing balance</th></tr></thead><tbody>';
+ let tp=0,tpay=0;for(let i=0;i<inp.exit;i++){const y=Y[i];tp+=y.principal;tpay+=y.loanPmt;h+='<tr'+(y.isExit?' style="background:#fdf8ec"':'')+'><td>Y'+y.y+'</td><td>'+fU(y.openBal)+'</td><td>'+fU(y.loanPmt)+'</td><td>'+fU(y.interest)+'</td><td>'+fU(y.principal)+'</td><td>'+fU(y.closeBal)+'</td></tr>';}
+ const S=Y[inp.exit-1];
+ h+='<tr class="total-row"><td>Totals (Y1–Y'+inp.exit+')</td><td></td><td>'+fU(tpay)+'</td><td></td><td>'+fU(tp)+'</td><td></td></tr>';
+ h+='<tr class="total-row"><td>Balance paid off at exit (Y'+inp.exit+')</td><td></td><td></td><td></td><td></td><td style="color:#b91c1c">'+fU(S.closeBal)+'</td></tr></tbody>';
+ $('loanSchedule').innerHTML=h;}
+function exitEcon(v,S,exitTI,inp,s){const accumDep=S.accumDep,adjBasis=S.adjBasis,payoff=S.payoff;
+ const gain=v-adjBasis;const rec=Math.max(0,Math.min(gain,accumDep));const ltg=Math.max(0,v-inp.price);const loss=Math.max(0,-gain);
+ const rt=tax(exitTI+rec,s)-tax(exitTI,s);const lt=ltcgTax(exitTI+rec,ltg,s);const lb=loss>0?(tax(exitTI,s)-tax(Math.max(0,exitTI-loss),s)):0;
+ const net=v-payoff-rt-lt+lb;return{rec,rt,net};}
+function exitVals(inp){const step=Math.max(25000,Math.round(inp.price/12/25000)*25000);const vals=[];for(let v=0;v<=inp.price;v+=step)vals.push(v);if(vals[vals.length-1]!==inp.price)vals.push(inp.price);return vals;}
+function renderExitTable(inp,M){const s=inp.status,S=M.years[inp.exit-1],exitTI=S.dealTI,payoff=S.payoff;const vals=exitVals(inp);
+ let h='<thead><tr><th>Buyback value</th><th>Recapture income</th><th>&#8722; Recapture tax</th><th>&#8722; Loan payoff</th><th>= Net cash at exit</th></tr></thead><tbody>';
+ vals.forEach(v=>{const e=exitEcon(v,S,exitTI,inp,s);h+='<tr><td>'+fU(v)+'</td><td>'+fU(e.rec)+'</td><td>'+fU(-e.rt)+'</td><td>'+fU(-payoff)+'</td><td style="font-weight:700;color:'+(e.net>=0?'#15803d':'#b91c1c')+'">'+fU(e.net)+'</td></tr>';});
+ h+='</tbody>';$('exitTable').innerHTML=h;}
+function renderExitChart(inp,M){const s=inp.status,S=M.years[inp.exit-1],exitTI=S.dealTI;const vals=exitVals(inp);
+ const nets=vals.map(v=>exitEcon(v,S,exitTI,inp,s).net);const W=680,H=240,padL=8,padR=8,padB=28,padT=10;
+ const maxV=Math.max(1,...nets.map(Math.abs));const zeroY=padT+(H-padT-padB)*(maxV/(2*maxV));const bw=(W-padL-padR)/vals.length;
+ let h='<svg viewBox="0 0 '+W+' '+H+'" width="100%" xmlns="http://www.w3.org/2000/svg">';
+ h+='<line x1="'+padL+'" y1="'+zeroY.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+zeroY.toFixed(1)+'" stroke="#c5d0de"/>';
+ vals.forEach((v,i)=>{const n=nets[i];const bh=Math.abs(n)/(2*maxV)*(H-padT-padB);const x=padL+i*bw+3;const y=n>=0?zeroY-bh:zeroY;
+  h+='<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+(bw-6).toFixed(1)+'" height="'+bh.toFixed(1)+'" fill="'+(n>=0?'#22a06b':'#c0392b')+'"><title>'+fUk(v)+' buyback → net '+fU(n)+'</title></rect>';
+  if(i%2===0)h+='<text x="'+(x+(bw-6)/2).toFixed(1)+'" y="'+(H-8)+'" text-anchor="middle" font-size="9" fill="#5b6b80">'+fUk(v)+'</text>';});
+ h+='</svg>';$('exitChartSvg').innerHTML=h;}
+function niceAxis(minV,maxV){const rng=(maxV-minV)||1;const mag=Math.pow(10,Math.floor(Math.log10(rng/6)));const step=Math.max(mag,Math.ceil((rng/6)/mag)*mag);return{min:Math.floor(minV/step)*step,max:Math.ceil(maxV/step)*step,step};}
+function renderWaterfall(inp,M){const el=$('waterfallSvg');if(!el)return;const Y=M.years,N=inp.exit;const down=inp.down*inp.price;
+ const steps=[{label:'Down',delta:-down}];
+ Y.slice(0,N).forEach(y=>steps.push({label:'Y'+y.y,delta:y.taxSav+y.opsCash+(y.isExit?y.netSale:0)}));
+ let run=0;steps.forEach(st=>{st.start=run;run+=st.delta;st.end=run;});
+ const items=steps.concat([{label:'All-in',start:0,end:run,delta:run,isTotal:true}]);
+ const W=880,H=320,padL=54,padR=14,padT=16,padB=44,plotW=W-padL-padR,plotH=H-padT-padB;
+ let mn=0,mx=0;items.forEach(it=>{mn=Math.min(mn,it.start,it.end);mx=Math.max(mx,it.start,it.end);});
+ const ax=niceAxis(mn,mx);const yS=v=>padT+plotH-((v-ax.min)/(ax.max-ax.min||1))*plotH;const slotW=plotW/items.length;
+ let h='<svg viewBox="0 0 '+W+' '+H+'" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">';
+ for(let v=ax.min;v<=ax.max+1;v+=ax.step){const y=yS(v);h+='<line x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+y.toFixed(1)+'" stroke="'+(Math.abs(v)<1?'#c5d0de':'#eef2f7')+'"/><text x="'+(padL-4)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" font-size="9" fill="#8a97a8">$'+(v/1000).toFixed(0)+'K</text>';}
+ items.forEach((it,i)=>{const cx=padL+i*slotW+slotW/2;const bw=Math.min(46,slotW*0.6);const yTop=yS(Math.max(it.start,it.end)),yBot=yS(Math.min(it.start,it.end));const col=it.isTotal?'#152a4d':(it.delta>=0?'#22a06b':'#c0392b');
+  h+='<rect x="'+(cx-bw/2).toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1,yBot-yTop).toFixed(1)+'" fill="'+col+'"><title>'+it.label+': '+fU(it.delta)+'</title></rect>';
+  if(i<items.length-1&&!items[i+1].isTotal){const nb=Math.min(46,slotW*0.6),nx=padL+(i+1)*slotW+slotW/2;h+='<line x1="'+(cx+bw/2).toFixed(1)+'" y1="'+yS(it.end).toFixed(1)+'" x2="'+(nx-nb/2).toFixed(1)+'" y2="'+yS(it.end).toFixed(1)+'" stroke="#b8c4d4" stroke-dasharray="2 2"/>';}
+  h+='<text x="'+cx.toFixed(1)+'" y="'+(padT+plotH+15)+'" text-anchor="middle" font-size="9.5" fill="#5b6b80">'+it.label+'</text><text x="'+cx.toFixed(1)+'" y="'+(it.delta>=0?yTop-4:yBot+12).toFixed(1)+'" text-anchor="middle" font-size="8.5" fill="#5b6b80">'+fUk(it.delta)+'</text>';});
+ h+='</svg>';el.innerHTML=h;}
+function renderReinvest(inp,M){const el=$('reinvestSvg');if(!el)return;const Y=M.years,N=inp.exit;const y1sav=Y[0].taxSav,r=inp.reinvest,recap=Y[N-1].recapTax;
+ const pts=[];for(let i=0;i<N;i++)pts.push({yr:i+1,held:y1sav,grown:y1sav*Math.pow(1+r,i)});
+ const W=880,H=300,padL=54,padR=118,padT=14,padB=40,plotW=W-padL-padR,plotH=H-padT-padB;
+ const ax=niceAxis(0,Math.max(y1sav,pts[N-1].grown,recap,1));const yS=v=>padT+plotH-((v-ax.min)/(ax.max-ax.min||1))*plotH;const xS=i=>padL+(N>1?i/(N-1):0)*plotW;
+ let h='<svg viewBox="0 0 '+W+' '+H+'" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">';
+ for(let v=ax.min;v<=ax.max+1;v+=ax.step){const y=yS(v);h+='<line x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(padL+plotW)+'" y2="'+y.toFixed(1)+'" stroke="#eef2f7"/><text x="'+(padL-4)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" font-size="9" fill="#8a97a8">$'+(v/1000).toFixed(0)+'K</text>';}
+ pts.forEach((p,i)=>h+='<text x="'+xS(i).toFixed(1)+'" y="'+(padT+plotH+15)+'" text-anchor="middle" font-size="9.5" fill="#5b6b80">Y'+p.yr+'</text>');
+ const ry=yS(recap);h+='<line x1="'+padL+'" y1="'+ry.toFixed(1)+'" x2="'+(padL+plotW)+'" y2="'+ry.toFixed(1)+'" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="5 4"/><text x="'+(padL+plotW+6)+'" y="'+(ry+3).toFixed(1)+'" font-size="10" fill="#c0392b">Recapture '+fUk(recap)+'</text>';
+ const heldPts=pts.map((p,i)=>xS(i).toFixed(1)+','+yS(p.held).toFixed(1)).join(' '),grownPts=pts.map((p,i)=>xS(i).toFixed(1)+','+yS(p.grown).toFixed(1)).join(' ');
+ h+='<polyline points="'+heldPts+'" fill="none" stroke="#9fb0c6" stroke-width="2.5"/><polyline points="'+grownPts+'" fill="none" stroke="#22a06b" stroke-width="2.5"/>';
+ h+='<text x="'+(padL+plotW+6)+'" y="'+(yS(pts[N-1].grown)+3).toFixed(1)+'" font-size="10" fill="#15803d" font-weight="700">Reinvested '+fUk(pts[N-1].grown)+'</text><text x="'+(padL+plotW+6)+'" y="'+(yS(y1sav)+3).toFixed(1)+'" font-size="10" fill="#5b6b80">Held '+fUk(y1sav)+'</text>';
+ h+='</svg>';el.innerHTML=h;}
+function renderLoanBalance(inp,M){const el=$('loanBalSvg');if(!el)return;const Y=M.years,N=inp.exit;
+ const pts=[{x:0,bal:M.loanP}];for(let i=0;i<N;i++)pts.push({x:i+1,bal:Y[i].closeBal});
+ const W=880,H=280,padL=54,padR=16,padT=14,padB=36,plotW=W-padL-padR,plotH=H-padT-padB;
+ const ax=niceAxis(0,M.loanP||1);const yS=v=>padT+plotH-((v-ax.min)/(ax.max-ax.min||1))*plotH;const xS=i=>padL+(pts.length>1?i/(pts.length-1):0)*plotW;
+ let h='<svg viewBox="0 0 '+W+' '+H+'" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">';
+ for(let v=ax.min;v<=ax.max+1;v+=ax.step){const y=yS(v);h+='<line x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+y.toFixed(1)+'" stroke="#eef2f7"/><text x="'+(padL-4)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" font-size="9" fill="#8a97a8">$'+(v/1000).toFixed(0)+'K</text>';}
+ pts.forEach((p,i)=>h+='<text x="'+xS(i).toFixed(1)+'" y="'+(padT+plotH+15)+'" text-anchor="middle" font-size="9.5" fill="#5b6b80">Y'+p.x+'</text>');
+ const line=pts.map((p,i)=>xS(i).toFixed(1)+','+yS(p.bal).toFixed(1)).join(' ');
+ h+='<polyline points="'+line+'" fill="none" stroke="#22a06b" stroke-width="2.5"/>';
+ pts.forEach((p,i)=>h+='<circle cx="'+xS(i).toFixed(1)+'" cy="'+yS(p.bal).toFixed(1)+'" r="3" fill="#22a06b"><title>Y'+p.x+' balance: '+fU(p.bal)+'</title></circle>');
+ const ex=pts[pts.length-1];h+='<text x="'+(xS(pts.length-1)-4).toFixed(1)+'" y="'+(yS(ex.bal)-8).toFixed(1)+'" text-anchor="end" font-size="10" font-weight="700" fill="#15803d">balance '+fUk(ex.bal)+'</text>';
+ h+='</svg><div style="font-size:10.5px;color:#5b6b80;margin:4px 6px 0">Outstanding loan balance each year. Y0 is the original loan; the endpoint is the balance paid off at exit out of the buyback.</div>';el.innerHTML=h;}
+function renderYearChart(inp,M){const el=$('yearChartSvg');if(!el)return;const Y=M.years,s=inp.status,N=inp.exit;const yrs=Y.slice(0,N);
+ const data=yrs.map(y=>({y:y.y,grey:y.sqTax,blue:y.dealTax+(y.isExit?y.recapTax:0),net:y.taxSav-(y.isExit?y.recapTax:0)}));
+ let cum=0;data.forEach(d=>{cum+=d.net;d.cum=cum;});
+ const W=880,H=340,padL=54,padR=14,padT=14,padB=40,plotW=W-padL-padR,plotH=H-padT-padB;
+ const vals=[0];data.forEach(d=>vals.push(d.grey,d.blue,d.net,d.cum));
+ let maxV=Math.max(...vals),minV=Math.min(...vals);const rng=(maxV-minV)||1;const mag=Math.pow(10,Math.floor(Math.log10(rng/6)));const step=Math.max(mag,Math.ceil((rng/6)/mag)*mag);
+ maxV=Math.ceil(maxV/step)*step;minV=Math.floor(minV/step)*step;const yS=v=>padT+plotH-((v-minV)/(maxV-minV||1))*plotH;const slotW=plotW/data.length,zeroY=yS(0);
+ let h='<svg viewBox="0 0 '+W+' '+H+'" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">';
+ for(let v=minV;v<=maxV+1;v+=step){const y=yS(v);h+='<line x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+y.toFixed(1)+'" stroke="'+(Math.abs(v)<1?'#c5d0de':'#eef2f7')+'"/><text x="'+(padL-4)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" font-size="9" fill="#8a97a8">$'+(v/1000).toFixed(0)+'K</text>';}
+ data.forEach((d,i)=>{const cx=padL+i*slotW+slotW/2;const bw=Math.min(28,slotW*0.3);
+  h+='<rect x="'+(cx-bw-1).toFixed(1)+'" y="'+Math.min(zeroY,yS(d.grey)).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.abs(yS(d.grey)-zeroY).toFixed(1)+'" fill="#c3ccd8"><title>Y'+d.y+' no-deal tax: '+fU(d.grey)+'</title></rect>';
+  h+='<rect x="'+(cx+1).toFixed(1)+'" y="'+Math.min(zeroY,yS(d.blue)).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.abs(yS(d.blue)-zeroY).toFixed(1)+'" fill="#5b8bd0"><title>Y'+d.y+' with-deal tax: '+fU(d.blue)+'</title></rect>';
+  h+='<text x="'+cx.toFixed(1)+'" y="'+(padT+plotH+16)+'" text-anchor="middle" font-size="10" fill="#5b6b80">Y'+d.y+'</text>';});
+ const netPts=data.map((d,i)=>(padL+i*slotW+slotW/2).toFixed(1)+','+yS(d.net).toFixed(1)).join(' ');
+ const cumPts=data.map((d,i)=>(padL+i*slotW+slotW/2).toFixed(1)+','+yS(d.cum).toFixed(1)).join(' ');
+ h+='<polyline points="'+netPts+'" fill="none" stroke="#152a4d" stroke-width="2.5"/>';
+ h+='<polyline points="'+cumPts+'" fill="none" stroke="#d97706" stroke-width="2.5" stroke-dasharray="6 4"/>';
+ data.forEach((d,i)=>{const cx=padL+i*slotW+slotW/2;h+='<circle cx="'+cx.toFixed(1)+'" cy="'+yS(d.net).toFixed(1)+'" r="3" fill="#152a4d"><title>Y'+d.y+' net this year: '+fU(d.net)+'</title></circle><circle cx="'+cx.toFixed(1)+'" cy="'+yS(d.cum).toFixed(1)+'" r="3" fill="#d97706"><title>Y'+d.y+' cumulative: '+fU(d.cum)+'</title></circle>';});
+ h+='</svg><div style="display:flex;flex-wrap:wrap;gap:14px;font-size:10.5px;color:#5b6b80;margin:4px 6px 0">'+
+  '<span><span style="display:inline-block;width:16px;height:3px;background:#d97706;vertical-align:middle"></span> Cumulative net (running total)</span>'+
+  '<span><span style="display:inline-block;width:16px;height:3px;background:#152a4d;vertical-align:middle"></span> Net tax effect this year</span>'+
+  '<span><span style="display:inline-block;width:10px;height:10px;background:#5b8bd0;vertical-align:middle"></span> Tax &mdash; with deal (incl. recapture)</span>'+
+  '<span><span style="display:inline-block;width:10px;height:10px;background:#c3ccd8;vertical-align:middle"></span> Tax &mdash; no deal</span></div>';
+ el.innerHTML=h;}
+function bdtable(rows){let h='<table class="bd"><tbody>';rows.forEach(r=>{const cls=r.tot?' class="tot"':'';h+='<tr'+cls+'><td>'+r[0]+'</td>'+r.slice(1).map(x=>'<td>'+(typeof x==='number'?fU(x):x)+'</td>').join('')+'</tr>';});return h+'</tbody></table>';}
+function taxRows(ti,s){const rows=[];for(const b of BR[s]){const inb=Math.max(0,Math.min(ti,b[1])-b[0]);if(inb>0)rows.push([(b[2]*100).toFixed(0)+'%',inb,inb*b[2]]);}return rows;}
+function taxBd(ti,s){let h='<table class="bd"><thead><tr><th>Bracket</th><th>Income taxed here</th><th>Tax</th></tr></thead><tbody>';let tot=0;taxRows(ti,s).forEach(r=>{tot+=r[2];h+='<tr><td>'+r[0]+'</td><td>'+fU(r[1])+'</td><td>'+fU(r[2])+'</td></tr>';});h+='<tr class="tot"><td>Total</td><td>'+fU(ti)+'</td><td>'+fU(tot)+'</td></tr></tbody></table>';return h;}
+function bwChart(topL,topTI,botL,botTI,s,caption){return '<div class="svgwrap" style="border:1px solid #e5ecf5;border-radius:8px;padding:6px 8px;background:#fbfcfe">'+bracketSvg(topL,topTI,botL,botTI,s)+'<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:10.5px;color:#5b6b80;margin:2px 4px 0">'+BR[s].map(b=>'<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+(RC[b[2].toFixed(2)]||"#38bdf8")+';vertical-align:middle"></span> '+(b[2]*100).toFixed(0)+'% bracket</span>').join('')+'</div></div><p class="walk-note" style="font-size:11.5px">'+caption+'</p>';}
+function openModal(m,yr){const o=LAST;if(!o)return;const inp=o.inp,M=o.M,Y=M.years,s=inp.status,y1=Y[0],S=Y[inp.exit-1];let title='',sub='',body='';
+ const persDed=Math.max(STD[s],inp.persded);
+ const dedApplied=y1.sqTI-y1.dealTI, dedRate=dedApplied?y1.taxSav/dedApplied:0, recRate=S.recapInc?S.recapTax/S.recapInc:0;
+ const cumSav=Y.slice(0,inp.exit).reduce((a,b)=>a+b.taxSav,0),cumOps=Y.slice(0,inp.exit).reduce((a,b)=>a+b.opsCash,0),down=inp.down*inp.price;
+ if(m==='y1'){title='Year-1 federal tax saving';sub='How the big first-year deduction turns into a real, bracket-by-bracket tax saving.';
+  const nolMade=y1.eblExcess+y1.negNOL;
+  body='<p>The heart of this deal is Year 1. The equipment is treated as business property, so its full cost is deductible right away &mdash; '+(inp.depMethod==='macrs'?'here spread on the MACRS schedule':'here the entire price under 100% bonus depreciation (§168(k))')+'. That deduction is combined with the year&rsquo;s lease income (which <i>reduces</i> the loss), the deductible loan interest, and the upfront platform fee. The result is a <b>net business loss</b> that flows onto your return and offsets your active income (W-2, business profit):</p>'+
+   bdtable([['Annual lease income (Year 1)',y1.lease],['&#8722; Loan interest (deductible)',-y1.interest],['&#8722; Depreciation ('+(inp.depMethod==='macrs'?'MACRS Yr-1':'100% bonus')+')',-y1.dep],['&#8722; Platform fee',-y1.feeDed],['= Net business loss',y1.schedC]].map((r,i,a)=>{if(i===a.length-1)r.tot=true;return r;}))+
+   '<p style="font-size:12.5px"><b>Where the loss comes from.</b> The depreciation of '+fU(y1.dep)+' dominates &mdash; it dwarfs the lease income, so even after the rent comes in, Year 1 is a large loss. The interest and platform fee add to it. (The model assumes a full year of lease income in Year 1, consistent with the program&rsquo;s &ldquo;income from placement&rdquo; language; if a unit sits idle at first, real Year-1 income would be lower.)</p>'+
+   '<p style="font-size:13px;font-weight:700;color:#152a4d;margin:14px 0 4px">How that loss becomes a tax saving</p>'+
+   '<div style="overflow-x:auto"><table class="bd"><thead><tr><th>Step</th><th>No deal</th><th>With equipment</th></tr></thead><tbody>'+
+    '<tr><td>Active income (Year 1)</td><td>'+fU(y1.gross)+'</td><td>'+fU(y1.gross)+'</td></tr>'+
+    '<tr><td>&#8722; Personal deduction</td><td>'+fU(-persDed)+'</td><td>'+fU(-persDed)+'</td></tr>'+
+    '<tr><td>+ Net business loss applied</td><td>&mdash;</td><td>'+fU(y1.dealTI-y1.sqTI)+'</td></tr>'+
+    '<tr class="tot"><td>= Taxable income</td><td>'+fU(y1.sqTI)+'</td><td>'+fU(y1.dealTI)+'</td></tr>'+
+    '<tr><td>Federal tax</td><td>'+fU(y1.sqTax)+'</td><td>'+fU(y1.dealTax)+'</td></tr>'+
+   '</tbody></table></div>'+
+   '<div class="step2"><b>Year-1 saving = '+fU(y1.sqTax)+' &#8722; '+fU(y1.dealTax)+' = '+fU(y1.taxSav)+'.</b> Because the deduction comes off the <i>top</i> of your income, it saves at your highest marginal rates first &mdash; a blended '+fP(dedRate)+' here.</div>'+
+   (nolMade>0?('<p style="font-size:12.5px;color:#b7791f"><b>Note &mdash; NOL carryforward:</b> your deduction was larger than Year 1 could absorb'+(y1.eblExcess>0?(' (and the §461(l) cap of '+fU(EBL[s])+' limited what could offset other income this year)'):'')+', so <b>'+fU(nolMade)+'</b> carries forward as a Net Operating Loss and is used against income in later years (at up to 80% of each year&rsquo;s income under §172). You can watch it draw down in the year-by-year table, and it&rsquo;s captured in the &ldquo;Cumulative saving&rdquo; box.</p>'):'')+
+   '<p style="font-size:13px;font-weight:700;color:#152a4d;margin:14px 0 4px">Chart 1 &mdash; the bracket walk</p>'+
+   bwChart('No deal',y1.sqTI,'With equipment',y1.dealTI,s,'Your taxable income split by tax bracket: no deal (top) vs. with the equipment (bottom). The brackets that disappear are your deduction &mdash; and because they are the highest-rate brackets, that&rsquo;s where the big saving comes from.')+
+   '<div style="overflow-x:auto;margin-top:6px"><table class="bd">'+spreadBdHTML('No deal',y1.sqTI,'With equipment',y1.dealTI,s,'Tax saved',false)+'</table></div>'+
+   '<p style="font-size:13px;font-weight:700;color:#152a4d;margin:14px 0 4px">Chart 2 &mdash; the tax, before and after</p>'+
+   '<div class="svgwrap" style="border:1px solid #e5ecf5;border-radius:8px;padding:6px 8px;background:#fbfcfe">'+barChart3([{label:'No deal tax',value:y1.sqTax,color:'#9fb0c6'},{label:'With equipment tax',value:y1.dealTax,color:'#3b82c4'},{label:'You save',value:y1.taxSav,color:'#22a06b'}])+'</div>'+
+   '<p class="walk-note" style="font-size:11.5px">Federal tax with no deal vs. with the equipment, and the difference you save (green).</p>'+
+   '<p style="font-size:11px;color:#7a8aa0;margin-top:10px"><b>Authority:</b> 100% Year-1 deduction under IRC §168(k) / §179 (OBBBA, P.L. 119-21); loss usability under §461(l) ('+fU(EBL.mfj)+' MFJ / '+fU(EBL.single)+' single); §172 80% NOL carryforward; 2026 brackets per Rev. Proc. 2025-32. Non-passive (active) treatment assumes §469 material participation.</p>';}
+ else if(m==='cum'){title='Cumulative saving to exit';sub='The Year-1 shelter, netted against the tax you add back on lease income in later years.';
+  body='<p>The Year-1 saving is only part of the story. In Years 2 through '+inp.exit+', the lease income is taxable (the big deduction is used up), so you add a little tax back each year &mdash; unless you still have an unused NOL, which keeps offsetting income until it runs out. This box sums it all:</p>'+
+   '<div style="overflow-x:auto"><table class="bd"><thead><tr><th>Year</th><th>Tax w/o deal</th><th>Tax w/ deal</th><th>Saving / (cost)</th><th>NOL remaining</th></tr></thead><tbody>'+Y.slice(0,inp.exit).map(y=>'<tr><td>Y'+y.y+'</td><td>'+fU(y.sqTax)+'</td><td>'+fU(y.dealTax)+'</td><td style="font-weight:700;color:'+(y.taxSav>=0?'#15803d':'#b91c1c')+'">'+fU(y.taxSav)+'</td><td>'+fU(y.nol)+'</td></tr>').join('')+'<tr class="tot"><td>Total</td><td></td><td></td><td>'+fU(cumSav)+'</td><td></td></tr></tbody></table></div>'+
+   '<div class="step2">Year 1 is the big shelter; Years 2&ndash;'+inp.exit+' add modest tax back as the lease income becomes taxable. This total is the pre-exit tax benefit &mdash; the recapture at exit (a separate box) is what you settle up against it.</div>';}
+ else if(m==='recap'||m==='recrate'){title='Recapture tax at exit';sub='The §1245 recapture stacks on top of your exit-year income as ordinary income.';
+  body='<p>Depreciation isn&rsquo;t free money &mdash; it&rsquo;s a timing shift. When the equipment is bought back in Year '+inp.exit+', §1245 &ldquo;recaptures&rdquo; the depreciation you took, taxing it as <b>ordinary income</b> stacked on top of that year&rsquo;s income, filling your highest brackets first.</p>'+
+   '<div style="overflow-x:auto"><table class="bd"><tbody>'+
+    '<tr><td>Exit-year taxable income (without recapture)</td><td style="text-align:right">'+fU(S.dealTI)+'</td></tr>'+
+    '<tr><td>+ Recapture income (buyback value)</td><td style="text-align:right">'+fU(S.recapInc)+'</td></tr>'+
+    '<tr class="tot"><td>= Taxable income with recapture</td><td style="text-align:right">'+fU(S.dealTI+S.recapInc)+'</td></tr>'+
+    '<tr><td>Tax without recapture</td><td style="text-align:right">'+fU(tax(S.dealTI,s))+'</td></tr>'+
+    '<tr><td>Tax with recapture</td><td style="text-align:right">'+fU(tax(S.dealTI+S.recapInc,s))+'</td></tr>'+
+    '<tr class="tot"><td>Recapture tax</td><td style="text-align:right">'+fU(S.recapTax)+'</td></tr>'+
+   '</tbody></table></div>'+
+   '<p style="font-size:12.5px">The recapture income of '+fU(S.recapInc)+' = buyback proceeds '+fU(S.proceeds)+' &#8722; adjusted basis '+fU(S.adjBasis)+', capped at the '+fU(S.accumDep)+' of depreciation taken. '+(inp.depMethod==='macrs'?'Under MACRS you still hold '+fU(S.adjBasis)+' of unrecovered basis, which reduces it.':'Under 100% bonus the basis is $0, so the entire buyback is recaptured (up to cost).')+'</p>'+
+   '<div class="step2"><b>Blended recapture rate: '+fP(recRate)+'.</b> Lower your exit-year income (e.g., retire first) to push this into cheaper brackets.</div>'+
+   '<p style="font-size:13px;font-weight:700;color:#152a4d;margin:14px 0 4px">Chart 1 &mdash; the recapture stacks up</p>'+
+   bwChart('Without recapture',S.dealTI,'With recapture',S.dealTI+S.recapInc,s,'Your exit-year taxable income split by bracket: without the recapture (top) vs. with it (bottom). The recapture pushes you into the darker, higher-rate brackets.')+
+   '<div style="overflow-x:auto;margin-top:6px"><table class="bd">'+spreadBdHTML('No recapture',S.dealTI,'With recapture',S.dealTI+S.recapInc,s,'Tax added',true)+'</table></div>'+
+   '<p style="font-size:13px;font-weight:700;color:#152a4d;margin:14px 0 4px">Chart 2 &mdash; the tax, with and without the recapture</p>'+
+   '<div class="svgwrap" style="border:1px solid #e5ecf5;border-radius:8px;padding:6px 8px;background:#fbfcfe">'+barChart3([{label:'Tax w/o recapture',value:tax(S.dealTI,s),color:'#9fb0c6'},{label:'Tax w/ recapture',value:tax(S.dealTI+S.recapInc,s),color:'#e07a5f'},{label:'Recapture cost',value:S.recapTax,color:'#c0392b'}])+'</div>'+
+   '<p class="walk-note" style="font-size:11.5px">Exit-year federal tax without vs. with the recapture, and the recapture cost (red).</p>'+
+   '<p style="font-size:11px;color:#7a8aa0;margin-top:10px"><b>Authority:</b> IRC §1245 recaptures prior depreciation as ordinary income on a taxable sale, capped at depreciation taken; §1011 / §1016 adjusted basis; stacked on exit-year income under the 2026 brackets (Rev. Proc. 2025-32).</p>';}
+ else if(m==='net'){const exitTax=S.recapTax+S.ltcgTaxAmt-S.lossBenefit;title='Net tax outcome';sub='The pure tax scorecard: the shelter you banked, minus the tax you owe at exit.';
+  body='<p>This isolates the <b>tax</b> side of the deal &mdash; it deliberately ignores the equipment sale economics and your operating cash (those are in the &ldquo;All-in&rdquo; box). It answers one question: over the whole hold, did the depreciation shelter save you more than the recapture cost you?</p>'+
+   bdtable([['Cumulative tax saving (Y1&ndash;Y'+inp.exit+')',cumSav],['&#8722; Recapture tax at exit',-S.recapTax]].concat(S.ltcgTaxAmt>0?[['&#8722; Capital-gains tax',-S.ltcgTaxAmt]]:[]).concat([['= Net tax outcome',cumSav-exitTax]]).map((r,i,a)=>{if(i===a.length-1)r.tot=true;return r;}))+
+   '<div class="step2">'+(cumSav-exitTax>=0?'Positive &mdash; the shelter outweighed the recapture. ':'Negative &mdash; at your current exit-year income the recapture outweighed the shelter. ')+'The recapture rate is set by your <b>exit-year income</b>; lowering it (a retirement year) is what flips this positive. The deal&rsquo;s own pitch relies on this timing plus reinvesting the Year-1 savings.</div>';}
+ else if(m==='ops'){title='Net operating cash to exit';sub='What the equipment actually puts in (or takes out of) your pocket each year.';
+  body='<p>Separate from taxes, the equipment earns lease income and you make a loan payment. The program&rsquo;s own figures are ~$11,050/month gross per $1M against a ~$10,334/month payment &mdash; a thin ~$716/month net. This table is your version, year by year:</p>'+
+   '<div style="overflow-x:auto"><table class="bd"><thead><tr><th>Year</th><th>Lease income</th><th>&#8722; Loan payment (P&amp;I)</th><th>&#8722; Platform fee</th><th>= Ops cash</th></tr></thead><tbody>'+Y.slice(0,inp.exit).map(y=>'<tr><td>Y'+y.y+'</td><td>'+fU(y.lease)+'</td><td>'+fU(-y.loanPmt)+'</td><td>'+fU(-y.feeDed)+'</td><td style="font-weight:700;color:'+(y.opsCash>=0?"#15803d":"#b91c1c")+'">'+fU(y.opsCash)+'</td></tr>').join('')+'<tr class="tot"><td>Total</td><td></td><td></td><td></td><td>'+fU(cumOps)+'</td></tr></tbody></table></div>'+
+   '<div class="step2">The <b>full</b> loan payment (interest + principal) is subtracted, because principal is a real cash outflow &mdash; even though only the interest is tax-deductible. Year 1 also carries the upfront platform fee, so it&rsquo;s the most negative. This is why the deal is primarily a <b>tax</b> play, not a cash-yield play: the operating cash is thin by design.</div>';}
+ else if(m==='allin'){const allIn=cumSav+cumOps+S.netSale-down;title='All-in net at exit';sub='Every dollar in and out over the whole hold, netted to one number.';
+  body='<p>This is the widest-angle number: it combines the tax savings, the operating cash, the sale proceeds, and your original cash down into a single Year-'+inp.exit+'-exit result.</p>'+
+   bdtable([['Cumulative tax saving',cumSav],['+ Net operating cash',cumOps],['+ Net cash from sale',S.netSale],['&#8722; Cash down at purchase',-down],['= All-in net at exit',allIn]].map((r,i,a)=>{if(i===a.length-1)r.tot=true;return r;}))+
+   '<p style="font-size:12.5px"><b>Net cash from sale = '+fU(S.netSale)+':</b> buyback '+fU(S.proceeds)+' &#8722; loan payoff '+fU(S.payoff)+' &#8722; recapture tax '+fU(S.recapTax)+(S.ltcgTaxAmt>0?' &#8722; capital-gains tax '+fU(S.ltcgTaxAmt):'')+(S.lossBenefit>0?' + §1231 loss benefit '+fU(S.lossBenefit):'')+'.</p>'+
+   '<div class="step2"><b>Two honest caveats.</b> (1) This is a Year-'+inp.exit+'-exit figure at your <i>current</i> exit-year income &mdash; lower that income and the recapture falls, improving this number. (2) It does <b>not</b> include reinvesting the Year-1 tax savings over the hold &mdash; the program&rsquo;s core time-value argument &mdash; which would add to the return. So treat this as the conservative, cash-only base case.</div>';}
+ else if(m==='dedrate'){title='The rate you deduct at (Year 1)';sub='The blended rate the Year-1 deduction actually saves.';
+  body='<p>Your deduction doesn&rsquo;t all save at your top rate &mdash; it walks <i>down</i> through the brackets. This is the blended result:</p>'+
+   bwChart('No deal',y1.sqTI,'With equipment',y1.dealTI,s,'The brackets that disappear between the two bars are your deduction. The saving is the tax that was sitting in those (highest-rate) brackets.')+
+   '<div style="overflow-x:auto;margin-top:6px"><table class="bd">'+spreadBdHTML('No deal',y1.sqTI,'With equipment',y1.dealTI,s,'Tax saved',false)+'</table></div>'+
+   '<div class="step2">Blended Year-1 deduction rate: <b>'+fP(dedRate)+'</b> on '+fU(dedApplied)+' of deduction actually applied this year.</div>';}
+ else if(m==='spread'){const dr=dedRate,rr=recRate;title='The arbitrage spread';sub='Deduct high, recapture low — or the reverse.';
+  body='<p>A depreciation deferral only &ldquo;wins&rdquo; on taxes if the rate you <b>deduct</b> at in Year 1 is higher than the rate you <b>recapture</b> at when you exit. If your income is the same in both years, there is no spread &mdash; you simply pay the tax later.</p>'+
+   bdtable([['You deduct at (Year 1)',fP(dr)],['You recapture at (Year '+inp.exit+')',fP(rr)],['= Spread',((dr-rr)*100).toFixed(1)+' pts ('+(dr-rr>=0?'favorable':'unfavorable')+')']].map((r,i,a)=>{if(i===a.length-1)r.tot=true;return r;}))+
+   '<div class="step2">The single biggest lever you control is your <b>exit-year income</b>: exiting in a low-income or retirement year pushes the recapture into cheaper brackets and flips this spread in your favor. Try lowering the Year-'+inp.exit+' income box and watch both the recapture rate and this spread change.</div>';}
+ else if(m==='sqti'||m==='dealti'){const y=Y[yr];const ti=m==='sqti'?y.sqTI:y.dealTI;title='Taxable income — Year '+y.y;sub=m==='sqti'?'Active income minus your personal deduction.':'Your income with the equipment business income/(loss) applied, after the §461(l) cap and any NOL.';
+  body=bdtable([['Active income',y.gross],['&#8722; Personal deduction',-persDed]].concat(m==='dealti'?[['Business income/(loss) applied',y.dealTI-y.sqTI]]:[]).concat([['= Taxable income',ti]]).map((r,i,a)=>{if(i===a.length-1)r.tot=true;return r;}))+
+   (m==='dealti'&&y.nolUsed>0?'<p style="font-size:12px;color:#5b6b80">Includes '+fU(y.nolUsed)+' of NOL used this year (limited to 80% of income under §172).</p>':'')+'<div style="overflow-x:auto;margin-top:8px"><table class="bd">'+taxBd(ti,s)+'</table></div>';}
+ else if(m==='sqtax'||m==='dealtax'){const y=Y[yr];const ti=m==='sqtax'?y.sqTI:y.dealTI;title='Federal tax — Year '+y.y;sub='The progressive tax on '+fU(ti)+' of taxable income, bracket by bracket.';body='<p style="font-size:12.5px">Each row is the slice of your income that falls in that bracket, and the tax on it. The total is your federal income tax for the year'+(m==='dealtax'&&y.isExit?' — in the exit year this includes the recapture stacked on top':'')+'.</p><div style="overflow-x:auto">'+taxBd(ti,s)+'</div>';}
+ $('modalBody').innerHTML='<span class="x" onclick="document.getElementById(\'modalBg\').style.display=\'none\'">×</span><h3>'+title+'</h3><p class="sub">'+sub+'</p>'+body;
+ $('modalBg').style.display='flex';}
+
+function buildIncome(){const grid=$('incomeGrid');grid.innerHTML='';for(let y=1;y<=MAXY;y++){const c=document.createElement('div');c.className='income-cell';c.innerHTML='<label>Y'+y+'</label><input type="number" id="i_w2_'+y+'" placeholder="0" value="">';grid.appendChild(c);}}
+function updateDepTot(){let s=0;for(let i=1;i<=MAXY;i++){const e=$('dep_'+i);if(e)s+=(parseFloat(e.value)||0);}const el=$('depTot');if(el){el.textContent='Total: '+s.toFixed(1)+'%';el.style.color=(Math.abs(s-100)<=0.6?'#15803d':'#b7791f');}}
+function buildDepSched(){const g2=$('depSchedGrid');if(!g2)return;g2.innerHTML='';for(let i=0;i<MAXY;i++){const c=document.createElement('div');c.className='dcell';const v=(DEPSCHED[i]!=null?DEPSCHED[i]*100:0);c.innerHTML='<label>Y'+(i+1)+'</label><input type="number" step="0.01" min="0" id="dep_'+(i+1)+'" value="'+(+v.toFixed(4))+'">';g2.appendChild(c);}const t=document.createElement('div');t.className='dtot';t.id='depTot';g2.appendChild(t);updateDepTot();}
+buildIncome();buildDepSched();
+$('statusToggle').addEventListener('click',e=>{if(e.target.dataset.s){const old=STD[STATUS];STATUS=e.target.dataset.s;document.querySelectorAll('#statusToggle button').forEach(b=>b.classList.toggle('active',b.dataset.s===STATUS));if(parseFloat($('i_persded').value)===old||$('i_persded').value==='')$('i_persded').value=STD[STATUS];render();}});
+$('depToggle').addEventListener('click',e=>{if(e.target.dataset.d){DEPMETHOD=e.target.dataset.d;document.querySelectorAll('#depToggle button').forEach(b=>b.classList.toggle('active',b.dataset.d===DEPMETHOD));$('depSchedWrap').style.display=(DEPMETHOD==='macrs')?'block':'none';render();}});
+document.querySelectorAll('.presetbtns button').forEach(b=>b.addEventListener('click',()=>{const p=MACRS_PRESETS[b.dataset.preset];if(p){DEPSCHED=p.slice();buildDepSched();render();}}));
+$('depSchedGrid').addEventListener('input',()=>{updateDepTot();render();});
+$('i_price').addEventListener('input',()=>{$('i_lease').value=Math.round((parseFloat($('i_price').value)||0)*0.1326);});
+document.querySelectorAll('input,select').forEach(i=>i.addEventListener('input',render));
+document.querySelectorAll('.tabbtn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tabbtn').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.p).classList.add('active');render();}));
+document.addEventListener('click',e=>{const t=e.target.closest('.ttip');if(t&&t.dataset.tip){$('modalBody').innerHTML='<span class="x" onclick="document.getElementById(\'modalBg\').style.display=\'none\'">×</span><h3>About this field</h3><p>'+t.dataset.tip+'</p>';$('modalBg').style.display='flex';}});
+$('modalBg').addEventListener('click',e=>{if(e.target===$('modalBg'))e.currentTarget.style.display='none';});
+function showRelease(){$('modalBody').innerHTML='<span class="x" onclick="document.getElementById(\'modalBg\').style.display=\'none\'">×</span>'+
+ '<h3>Heavy Machinery — Tax Modeling Application</h3><p class="sub">Version 1.0 &middot; July 2026 &middot; Federal-only educational model</p>'+
+ '<p>Models the <b>federal income-tax effect</b> of buying heavy equipment into the EquipmentShare / EZ Advantage Flex rental program through an LLC: the Year-1 depreciation shelter, the §461(l) cap and NOL carryforward, the annual lease income and deductible interest as the loan amortizes, and the §1245 recapture at the Year-6 buyback.</p>'+
+ '<div class="step2"><b>In this release (v1.0):</b><br>&bull; 100% bonus (§168(k)) vs 5-year MACRS toggle with editable schedule and side-by-side comparison.<br>&bull; Amortizing loan schedule and balance chart; Year-6 buyback exit with adjusted-basis §1245 recapture.<br>&bull; Single / MFJ on 2026 brackets (Rev. Proc. 2025-32); §461(l) cap and §172 NOL.<br>&bull; Clickable &ldquo;show your work&rdquo; headline breakdowns with bracket-walk charts, a Tax Waterfall, cash-flow waterfall, and a reinvest-the-savings view.<br>&bull; Calibrated to the signed deal packet; every figure cross-referenced to the tax code.</div>'+
+ '<p style="font-size:12px;color:#7a8aa0"><b>Not tax advice</b> — an educational, federal-only model. State tax (many states do not conform to bonus depreciation), SE tax, NIIT, AMT, and QBI are not modeled, and the §469 material-participation and §465 at-risk positions are assumptions. Verify every figure with your own CPA.</p>';
+ $('modalBg').style.display='flex';}
+$('verBadge').addEventListener('click',showRelease);
+render();
+</script>
+</body></html>
