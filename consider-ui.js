@@ -28,8 +28,8 @@
  * deal (the candidate handed to PlanIncludes.consider on Add) } or { error }.
  *
  * KNOWN LIMITS. One considered deal at a time: adding another replaces it. The deal's money
- * in is taken from the public investments, and a commitment above them is refused rather
- * than simulated (the simulator cannot charge money that is not there).
+ * in is taken from the public investments; a commitment above them is simulated, with the
+ * unpaid part counted as a shortfall, and the card says so.
  */
 (function (root) {
   'use strict';
@@ -105,7 +105,13 @@
   async function runIt(card) {
     const PI = root.PlanIncludes, ctx = PI && PI.ctx;
     if (S.busy || !S.slug || !ctx) return;
-    if (!check(true)) { S.result = null; draw(card); return; }
+    /* A commitment above the public investments is no longer refused: since the simulator
+       pays outflows from every sleeve and records what it cannot pay as a shortfall, it can
+       show the member exactly that. A private-only book (no public money at all) is the
+       common case among community investors, and refusing every deal there made the tester
+       useless to them. The result carries a warning instead. */
+    if (!check(false)) { S.result = null; draw(card); return; }
+    const liquidNow = liquidFor(ctx);
     const inp = Object.assign({ slug: S.slug }, candidate());
     const seq = ++S.seq;
     S.busy = true; draw(card);
@@ -121,12 +127,17 @@
       const sim = E().simulate(book, { irr: true });
       const t = sim.totals, firstBack = (sim.cum.find((r) => r.p50 >= inp.commitment) || {}).year;
       const deal = { name: f.name, commitment: inp.commitment, paid: inp.paid, year: inp.year, account: inp.account, book, slug: inp.slug };
-      const eff = PI.preview(ctx, deal);
+      /* The two retirement figures wait for a real plan (RunwayUI.missing): on a member's
+         file without the You tab they would be the sample household's, not theirs. */
+      let need = null;
+      try { need = root.RunwayUI && root.RunwayUI.missing ? root.RunwayUI.missing(ctx) : null; } catch (e3) { need = null; }
+      const eff = need ? null : PI.preview(ctx, deal);
       let er = null;
       try { er = root.RunwayUI.expectedReturn(ctx); } catch (e2) { er = null; }
-      result = { name: f.name, cls: f.assetClass, inputs: inp, deal, eff, er,
+      result = { name: f.name, cls: f.assetClass, inputs: inp, deal, eff, er, need,
         p10: t.p10 / inp.commitment, p50: t.p50 / inp.commitment, p90: t.p90 / inp.commitment, mean: t.mean / inp.commitment,
-        irr: sim.irr && sim.irr.portfolio ? sim.irr.portfolio.p50 : null, firstBack };
+        irr: sim.irr && sim.irr.portfolio ? sim.irr.portfolio.p50 : null, firstBack,
+        short: liquidNow != null && inp.commitment > liquidNow ? liquidNow : null };
     } catch (e) {
       result = { error: 'This deal could not be run: ' + (e && e.message ? e.message : 'unknown error') + '. Your Retirement plan has not changed.' };
     }
@@ -180,7 +191,11 @@
         + (e ? kpiBox('Chance the money lasts', pct(e.before) + ' → ' + pct(e.after), 'your retirement plan, without it → with it' + (d ? ' (' + (d > 0 ? '+' : '') + d + ' point' + (Math.abs(d) === 1 ? '' : 's') + ')' : ''), e.after >= e.before ? 'pos' : 'neg')
           + kpiBox('Change in money left at the end', (e.endAfter >= e.endBefore ? '+' : '') + short(e.endAfter - e.endBefore), 'typical future, in today’s dollars', e.endAfter >= e.endBefore ? 'pos' : 'neg') : '')
         + '</div>'
-        + (e ? whyLine(r, e) : '');
+        + (r.short != null ? '<p class="note key"><b>More than your public money:</b> this commitment is larger than the '
+          + short(r.short) + ' of public investments in your file. The plan pays it from what is there and counts the rest as a shortfall, which is what the figures above show.</p>' : '')
+        + (e ? whyLine(r, e) : '')
+        + (r.need ? '<p class="note key"><b>What it does to your retirement</b> appears once your file has '
+          + 'the figures the Retirement tab asks for (' + esc(r.need.join(', ')) + '). The figures above are the deal’s own and do not need them.</p>' : '');
       if (isIncluded(r, cur)) {
         h += includedNote(cur, true);
       } else {

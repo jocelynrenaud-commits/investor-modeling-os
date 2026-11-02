@@ -32,7 +32,7 @@
  *              year, or null for "use the class assumption"), st: holdingStats(), gain,
  *              isPrivate?, uncalled?, commitment? }
  *   load()   { holdings: [holding], history: [{date 'YYYY-MM-DD', account, value, flow}],
- *              isDemo, asOf, source ('balances'|'holdings'|'sample'), notes: [string] }
+ *              isDemo, asOf, source ('balances'|'holdings'|'none'|'sample'), notes: [string] }
  *   sleeve   { id, label, kind, balance, mu (price return), sd, yield, taxMix } with corr
  *              { [id]: { [id]: -1..1 } }, which is what Runway.simulate takes.
  *
@@ -715,12 +715,18 @@
     const notes = [];
     const bal = holdingsFromBalances(sheets, notes);
     const hold = holdingsFromSheets(sheets, bal ? [] : notes);
-    const src = bal ? 'balances' : hold ? 'holdings' : 'sample';
+    /* A member's own workbook with neither tab holds no public money. Falling back to the
+       sample household there showed a private-only investor someone else's $1.6M of stocks
+       on four tabs (found with a tester's real, private-only book). The sample is only for
+       the example book, which arrives with no sheets at all. */
+    const ownFile = !!sheets && Object.keys(sheets).length > 0;
+    const src = bal ? 'balances' : hold ? 'holdings' : ownFile ? 'none' : 'sample';
+    if (src === 'none') notes.push('Your file has no Holdings or Balances tab, so it shows no public investments. Add one to see your whole portfolio.');
     if (bal && hold && hold.rows.length) {
       notes.push('Your tracker has both a ' + bal.sheet + ' tab and a ' + hold.sheet + ' tab. Every tab uses ' + bal.sheet
         + ', which the Retirement plan reads; the ' + hold.sheet + ' rows were not used.');
     }
-    const holdings = bal ? bal.rows : hold ? hold.rows : DEMO_HOLDINGS;
+    const holdings = bal ? bal.rows : hold ? hold.rows : src === 'none' ? [] : DEMO_HOLDINGS;
     const real = src !== 'sample';
     let hist = historyFromSheets(sheets) || (real ? [] : demoHistory(DEMO_HOLDINGS));
     /* A history with no Account column is the whole public portfolio. With one public

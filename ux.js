@@ -48,6 +48,7 @@
     'Your portfolio': 'What you committed, what you have paid in, and what is still to pay in.',
     'Your allocation': 'Split by what you committed, not by current value.',
     'Your positions': 'Every position and what the model expects from it.',
+    'Capital calls before you stop': 'What your deals can still call before you stop, against the public money in your file.',
     'Capital calls vs. preferred income': 'Money you still owe against the income the documents promise.',
     'Cumulative cash received': 'Cash paid back to you, added up as it arrives. Plan against this one.',
     'Maturity and liquidity ladder': 'When each position is due to pay you back.',

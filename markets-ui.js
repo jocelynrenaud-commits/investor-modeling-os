@@ -290,7 +290,7 @@
     const list = d.pub.filter((h) => S.acct === 'all' || h.account === S.acct);
     const ps = M().portfolioStats(list);
     if (!ps) {
-      const why = d.mk.source === 'sample' ? 'No public holdings yet.' : 'Your ' + esc(d.mk.sheet || 'Holdings') + ' tab has no rows with a value above $0, so there are no public holdings to show.';
+      const why = d.mk.source === 'sample' ? 'No public holdings yet.' : d.mk.source === 'none' ? 'Your file has no Holdings or Balances tab, so there are no public holdings to show. Add one to see your whole portfolio.' : 'Your ' + esc(d.mk.sheet || 'Holdings') + ' tab has no rows with a value above $0, so there are no public holdings to show.';
       host.innerHTML = notesBox(d.mk) + '<div class="card"><p class="note">' + why + ' Add a Holdings tab (Symbol, Account, Quantity, Price) or a Balances tab (Account, Sleeve, Value) to your tracker.</p></div>';
       return;
     }

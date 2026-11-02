@@ -129,6 +129,54 @@
   /* "1 point" / "-3 points", for differences of whole percents. */
   const pts = (d) => (d > 0 ? '+' : '') + d + (Math.abs(d) === 1 ? ' point' : ' points');
 
+  /* You-tab fields that belong to Tax Strategies, not to the plan. */
+  const TAX_ONLY = ['filingStatus', 'w2Now', 'retireIncome'];
+
+  /* WHAT A MEMBER'S FILE MUST CARRY before Retirement shows a result (grill Q20, 2026-11-01):
+     the five You-tab figures below and a Balances or Holdings tab. Each entry is the field and
+     the label to type in column A of the You tab. A zero is an answer (no Social Security, no
+     public money); only a missing row or a blank cell counts as missing. */
+  const REQUIRED_YOU = [
+    ['birthYear', 'Birth year'],
+    ['stopYear', 'Planned stop work year'],
+    ['spend', 'Annual spend target'],
+    ['benefitAnnual', 'Estimated annual benefit'],
+    ['benefitAge', 'Benefit start age'],
+  ];
+  /* The labels still missing from a member's file, or null when nothing is missing. The
+     sample household (no file) and the example book (an empty sheet set) are never gated:
+     they are demonstrations, and say so. A Balances or Holdings tab counts when it is there
+     at all, even with no positive row, so a member with nothing outside their deals types a
+     Cash row of 0 rather than leaving the tab out. */
+  function missingRequired(port, ctx) {
+    const sheets = ctx && ctx.sheets;
+    if (!sheets || !Object.keys(sheets).length) return null;
+    const you = (port && port.you) || {};
+    const miss = REQUIRED_YOU.filter(([k]) => you[k] == null || Number.isNaN(you[k])).map(([, l]) => l);
+    const mk = root.Markets ? root.Markets.load(sheets) : null;
+    const named = Object.keys(sheets).some((n) => /^\s*(balances?|holdings?)\b/i.test(n));
+    const hasBal = !!(port && port.balances) || named
+      || !!(mk && (mk.source === 'balances' || mk.source === 'holdings'));
+    if (!hasBal) miss.push('A Balances tab (or a Holdings tab)');
+    return miss.length ? miss : null;
+  }
+
+  /* The card shown in place of the plan while missingRequired has anything to say. */
+  function requiredCard(miss) {
+    return '<div class="card"><h2>Retirement Simulator</h2>'
+      + '<p class="note key"><b>Your file needs ' + miss.length + ' more '
+      + (miss.length === 1 ? 'figure' : 'figures') + ' before this page can plan your retirement.</b> '
+      + 'Without them the plan would run on a sample household’s age, spending and savings, and the '
+      + 'answer would not be yours. Add these to your tracker and upload it again:</p>'
+      + '<ul class="rw-need">' + miss.map((m) => '<li>' + esc(m) + '</li>').join('') + '</ul>'
+      + '<p class="note">The first five go on the <b>You</b> tab, one per row: the label in column A, '
+      + 'your number in column B. Type 0 for a benefit you will not get. The Balances tab lists each '
+      + 'account outside your private deals (401k, IRA, brokerage, cash) with its value; if you hold '
+      + 'nothing outside your deals, add one Cash row with 0. The tracker template has all of them: '
+      + '<a href="tracker-template.xlsx" download>download it</a> and copy the You and Balances tabs '
+      + 'into your file. Your deals, Overview and the other tabs work without them.</p></div>';
+  }
+
   /* What the workbook said, if it said anything: a Portfolio.build result, or null when the
      sheets carry none of the plan tabs. Parsed fresh per call from the sheets app.js kept. */
   function fromSheet(ctx) {
@@ -152,11 +200,20 @@
       if (sv.sleeves.length) {
         base.sleeves = sv.sleeves; base.corr = sv.corr; base.fromHoldings = true;
         base.holdingsAreSample = !!mk.isDemo;
+      } else if (mk.source === 'none') {
+        /* The member's file has no public money: plan on the private deals alone rather than
+           the sample household's sleeves. */
+        /* The simulator needs one sleeve to land deal cash in, so a private-only plan gets a
+           single Cash sleeve holding $1 (taxable). Deal proceeds and coupons arrive into it
+           and earn the cash yield; capital calls are paid from it, and whatever it cannot
+           pay is a shortfall. */
+        base.sleeves = [{ id: 'cash', label: 'Cash from your deals', kind: 'cash', balance: 1, taxMix: { preTax: 0, roth: 0, taxable: 1 } }];
+        base.corr = null; base.fromHoldings = false; base.noPublic = true;
       }
     }
     if (port) {
       if (port.you) Object.keys(port.you).forEach((k) => {
-        if (k.charAt(0) !== '_' && port.you[k] != null && !Number.isNaN(port.you[k])) {
+        if (TAX_ONLY.indexOf(k) < 0 && k.charAt(0) !== '_' && port.you[k] != null && !Number.isNaN(port.you[k])) {
           base[k] = port.you[k];
         }
       });
@@ -466,6 +523,10 @@
       ? (C.holdingsAreSample ? 'Balances come from the sample household\'s public holdings (the Holdings tab).'
         : 'Balances come from <b>your Holdings tab</b>, grouped into the same sleeves it shows.')
       : '';
+    if (C.noPublic && !port) {
+      return '<p class="note key"><b>Your private deals only.</b> Your file has no Holdings, Balances or You tab, so this plan has no public money: your deals’ payouts land in a cash account that pays your calls and spending, '
+        + 'and your age, spending and Social Security are <b>sample assumptions</b>. Add a You tab and a Holdings tab for a plan that is yours.</p>';
+    }
     if (!port) {
       return '<p class="note"><b>Sample household.</b> ' + holdings + '</p>';
     }
@@ -480,6 +541,7 @@
         + port.balances.rows.length + ' holdings worth ' + money(tot)
         + ' across ' + port.sleeves.length + ' sleeve' + (port.sleeves.length === 1 ? '' : 's'));
     }
+    if (C.noPublic) bits.push('your file holds <b>no public money</b>, so your deals’ payouts land in a cash account that pays your calls and spending');
     let h = '<p class="note"><b class="pos">Running on your tracker.</b> ' + (bits.length ? bits.join(', and ') + '. ' : '')
       + (port.balances ? '' : holdings + ' ')
       + 'Anything your tracker did not say still comes from the sample household’s '
@@ -732,6 +794,48 @@
       + 'two more years did to the number. Run on ' + lv.paths.toLocaleString('en-US')
       + ' lifetimes per row, fewer than the headline above, so a row within a point or two '
       + 'of zero is noise rather than a finding.</p></div>';
+  }
+
+  /* CAPITAL CALLS BEFORE YOU STOP (Q21). The calls are contractual, so this is arithmetic,
+     not a simulation: each year's calls from the engine's own schedule, their running total,
+     and how much of that total the public money in the file could not cover if no deal paid
+     anything out first. The first year a gap appears is highlighted; the panel states numbers
+     and gives no verdict. The simulation above counts deal payouts and returns; this does not. */
+  function panelCalls(ctx, C) {
+    const PI = root.PlanIncludes;
+    if (!PI || !PI.callsDated || !ctx || !ctx.book || !ctx.book.length) return '';
+    const dated = PI.callsDated(ctx.book);
+    const stop = C.stopYear;
+    const years = Object.keys(dated).map(Number).filter((y) => y < stop).sort((a, b) => a - b);
+    if (!years.length) return '';
+    const later = Object.keys(dated).map(Number).filter((y) => y >= stop)
+      .reduce((a, y) => a + -dated[y].net, 0);
+    const have = C.noPublic ? 0 : (C.sleeves || []).reduce((a, s) => a + (Number(s.balance) || 0), 0);
+    let cum = 0, flagged = false;
+    const rows = years.map((y) => {
+      const due = -dated[y].net;
+      cum += due;
+      const gap = Math.max(0, cum - have);
+      const first = gap > 0.5 && !flagged;
+      if (first) flagged = true;
+      return '<tr' + (first ? ' class="rw-uncov"' : '') + '><td class="l">' + y + (first ? '<br><b class="warn" style="font-size:12px;white-space:nowrap">first year not covered</b>' : '') + '</td>'
+        + '<td>' + money(due) + '</td><td>' + money(cum) + '</td>'
+        + '<td' + (gap > 0.5 ? ' class="neg"' : '') + '>' + (gap > 0.5 ? money(gap) : '$0') + '</td></tr>';
+    });
+    const gapEnd = Math.max(0, cum - have);
+    return '<div class="card rw-calls"><h2>Capital calls before you stop</h2>'
+      + '<p class="note">These are the capital calls your deals can still make before ' + stop
+      + ', year by year, from the Next call date and amount in your file and an even spread of the '
+      + 'rest of what is still to pay in. Each row shows that year&rsquo;s calls, the running '
+      + 'total, and how much of the total the public money in your file could not cover if none '
+      + 'of your deals paid anything out first. Your deals&rsquo; payouts and your accounts&rsquo; '
+      + 'returns are left out here; the figures above count both.</p>'
+      + '<p class="note key"><b>Calls due ' + years[0] + (years.length > 1 ? ' to ' + years[years.length - 1] : '')
+      + ': ' + money(cum) + '.</b> Public money in your file: ' + money(have) + '. Not covered: '
+      + (gapEnd > 0.5 ? '<span class="neg">' + money(gapEnd) + '</span>' : '$0') + '.'
+      + (later > 0.5 ? ' A further ' + money(later) + ' falls in ' + stop + ' or later.' : '') + '</p>'
+      + '<div style="overflow-x:auto"><table style="margin-top:10px"><tr><th class="l">Year</th><th>Calls due</th>'
+      + '<th>Running total</th><th>Not covered</th></tr>' + rows.join('') + '</table></div></div>';
   }
 
   /* ONE FUTURE, WRITTEN OUT. Every other panel is a range, and a range cannot be read down a
@@ -996,6 +1100,8 @@
     if (book) lastBook = book;
     if (root.PlanIncludes) root.PlanIncludes.remember(ctx);
     const port = fromSheet(ctx);
+    const miss = missingRequired(port, ctx);
+    if (miss) { host.innerHTML = requiredCard(miss); return; }
     const A = cfgBase(port, ctx);
     const C = cfg(port, ctx);
     const E = (typeof Engine !== 'undefined' && Engine) ? Engine : (root.Engine || null);
@@ -1048,6 +1154,7 @@
       + panelControls(C, A, port)
       + panelIncludes(r, base)
       + panelHeadline(r, prev)
+      + panelCalls(ctx, C)
       + panelCurve(r)
       + panelWhen(r, runCfg)
       + panelBreaks(r)
@@ -1134,6 +1241,11 @@
         return a + Number(s.balance) * ((s.mu != null ? Number(s.mu) : k.mu || 0) + (s.yield != null ? Number(s.yield) : k.yield || 0));
       }, 0) / tot;
     },
+    /* The You-tab labels (and the Balances tab) a member's file still lacks, or null. The
+       deal tester uses it to hold back its two retirement figures until the plan is real. */
+    missing(ctx) { return missingRequired(fromSheet(ctx), ctx); },
+    /* The member's You tab as parsed, or null: Tax Strategies seeds its baseline from it. */
+    you(ctx) { const p = fromSheet(ctx); return p && p.you ? p.you : null; },
     /* Clears every slider and button override (a new book does this automatically). */
     reset,
     real, money, dealTaxMix,

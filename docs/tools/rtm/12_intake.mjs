@@ -161,6 +161,12 @@ export default async (K) => {
         ex: 'tracker-template.xlsx sheets: Read me, Positions, What you get back, You, Balances, Property, Cashflows, Events.',
         given: 'a member who downloads the template', when: 'they look for where to enter stock positions', then: 'a Holdings tab is there (not built)',
         tests: [], src: 'tracker-template.xlsx', status: 'Gap' },
+      { id: 'INT-026', title: 'Template You tab: required and optional figures',
+        req: 'The template’s You tab marks the five figures Retirement requires (orange) apart from the optional ones (yellow), and carries three optional Tax Strategies figures (Filing status, Household income, Taxable income after you stop) that seed that tab’s baseline once per book. The Balances tab says it is required and how to show no public money.',
+        rule: 'Labels in column A are matched by prefix (portfolio.js YOU_KEYS); values are read from column B only. Tax-only fields never enter the Retirement config.',
+        ex: 'You tab rows: REQUIRED Birth year, Planned stop work year, Annual spend target, Estimated annual benefit, Benefit start age; OPTIONAL Plan to age, Floor spend, Inflation until stop, Inflation after stop; OPTIONAL (tax) Filing status, Household income, Taxable income after you stop.',
+        given: 'the downloaded template, unedited', when: 'it is uploaded', then: 'all twelve You figures are read and Retirement runs',
+        tests: [['U', 'Tax Strategies baseline is seeded from the You tab'], ['U', 'the tax-only You fields stay out of the plan config']], src: 'tracker-template.xlsx; portfolio.js:YOU_KEYS; taxes-ui.js:seedFromSheet', status: 'Implemented' },
     ],
   }];
 };

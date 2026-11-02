@@ -1685,6 +1685,26 @@ Numbered regions, top to bottom on the desktop screenshot:
 - **Source:** runway.js:simulate
 - **Status:** Implemented
 
+### RTR-026. Required figures before a member plan runs
+
+- **Requirement:** On a member’s own file, Retirement shows no result until the You tab carries birth year, planned stop work year, annual spend target, estimated annual benefit and benefit start age, and the file has a Balances or Holdings tab. Until then it lists exactly what is missing, labelled as typed on the You tab. The deal tester shows the deal’s own figures but holds back its two retirement figures and says why. The sample household and the example book are never gated. (Owner decision, grill Q20, 2026-11-01.)
+- **Rule or formula:** missing = the five You fields that are absent or blank in column B, plus "A Balances tab (or a Holdings tab)" when neither tab is present. A 0 is an answer (no benefit; a Balances tab whose only row is Cash 0 means no public money). Column C is never read as a value.
+- **Worked example:** A You tab with a blank birth year, stop year 2030 and a benefit of 0 parses to {"stopYear":2030,"benefitAnnual":0}; Retirement would ask for Birth year, Annual spend target, Benefit start age and a Balances tab.
+- **Acceptance:** Given a member file of private deals only, with no You or Balances tab; when Retirement opens; then it lists the six missing items and shows no chance-the-money-lasts figure.
+- **Test cases:** TC-RTR-026-01: ui.test.mjs, check 'Q20 private-only file: Retirement asks for its figures instead of running on the sample'; TC-RTR-026-02: ui.test.mjs, check 'Q20 the request names every missing figure as it is typed on the You tab'; TC-RTR-026-03: ui.test.mjs, check 'Q20 only the one missing figure is asked for; a 0 benefit counts as an answer'; TC-RTR-026-04: ui.test.mjs, check 'Q20 a complete file runs, and a Balances tab of 0 reads as no public money'; TC-RTR-026-05: ui.test.mjs, check 'Q20 the plan uses the member'; TC-RTR-026-06: ui.test.mjs, check 'Q20 on a file without the You tab the tester holds back its retirement figures and says why'; TC-RTR-026-07: ui.test.mjs, check 'a blank or unreadable You value is missing, never the explanation beside it'; TC-RTR-026-08: ui.test.mjs, check 'the example book and the sample household are never gated'
+- **Source:** runway-ui.js:missingRequired, requiredCard; consider-ui.js; portfolio.js:parseYou
+- **Status:** Implemented
+
+### RTR-027. Capital calls before the stop year
+
+- **Requirement:** When the book still owes capital calls dated before the planned stop year, Retirement shows them as numbers with no verdict: each year’s calls from the engine’s own call schedule, the running total, and how much of that total the public money in the file could not cover if no deal paid anything out first. The first year a gap appears is highlighted in red. A summary line states calls due, public money in the file and the amount not covered, and how much more falls in or after the stop year. Deal payouts and account returns are left out of this panel; the simulation counts both. (Owner decision, grill Q21 option b, 2026-11-02.)
+- **Rule or formula:** For each year y < stopYear with calls: due(y) = callSchedule; cum(y) = sum of due up to y; notCovered(y) = max(0, cum(y) - publicMoney), publicMoney = sum of sleeve balances (0 when the file has no public money). Highlight = the first y with notCovered > 0, and only that row. No panel when nothing is left to call before the stop year.
+- **Worked example:** A private-only book owing $37,500 in 2026 and $200,000 in 2027, with $0 of public money, reads: 2026 not covered $37,500 (highlighted, first year not covered), 2027 not covered $237,500.
+- **Acceptance:** Given a member file with uncalled commitments, a stop year of 2030 and $100,000 of public money; when Retirement opens; then the panel lists 2026 to 2029, the running total ties to the call schedule, and only the first year the calls outrun $100,000 is highlighted.
+- **Test cases:** TC-RTR-027-01: ui.test.mjs, check 'Q21 a member file with calls before the stop year shows the capital-calls panel'; TC-RTR-027-02: ui.test.mjs, check 'Q21 the panel lists only years before the stop year'; TC-RTR-027-03: ui.test.mjs, check 'Q21 the running total ties to the engine call schedule'; TC-RTR-027-04: ui.test.mjs, check 'Q21 exactly one row is highlighted, the first year the calls outrun the public money'; TC-RTR-027-05: ui.test.mjs, check 'Q21 the panel states the numbers and gives no verdict'; TC-RTR-027-06: ui.test.mjs, check 'Q21 calls the file can cover are listed with nothing highlighted'; TC-RTR-027-07: ui.test.mjs, check 'Q21 a book with nothing left to call shows no capital-calls panel'
+- **Source:** runway-ui.js:panelCalls; includes.js:callsDated
+- **Status:** Implemented
+
 
 ---
 
@@ -2653,6 +2673,16 @@ Numbered regions, top to bottom on the desktop screenshot:
 - **Source:** tracker-template.xlsx
 - **Status:** Gap
 
+### INT-026. Template You tab: required and optional figures
+
+- **Requirement:** The template’s You tab marks the five figures Retirement requires (orange) apart from the optional ones (yellow), and carries three optional Tax Strategies figures (Filing status, Household income, Taxable income after you stop) that seed that tab’s baseline once per book. The Balances tab says it is required and how to show no public money.
+- **Rule or formula:** Labels in column A are matched by prefix (portfolio.js YOU_KEYS); values are read from column B only. Tax-only fields never enter the Retirement config.
+- **Worked example:** You tab rows: REQUIRED Birth year, Planned stop work year, Annual spend target, Estimated annual benefit, Benefit start age; OPTIONAL Plan to age, Floor spend, Inflation until stop, Inflation after stop; OPTIONAL (tax) Filing status, Household income, Taxable income after you stop.
+- **Acceptance:** Given the downloaded template, unedited; when it is uploaded; then all twelve You figures are read and Retirement runs.
+- **Test cases:** TC-INT-026-01: ui.test.mjs, check 'Tax Strategies baseline is seeded from the You tab'; TC-INT-026-02: ui.test.mjs, check 'the tax-only You fields stay out of the plan config'
+- **Source:** tracker-template.xlsx; portfolio.js:YOU_KEYS; taxes-ui.js:seedFromSheet
+- **Status:** Implemented
+
 
 ---
 
@@ -3374,6 +3404,8 @@ Every requirement, its test cases, whether an existing check covers it, and its 
 | RTR-023 | TC-RTR-023-01, TC-RTR-023-02 | covered | Implemented |
 | RTR-024 | TC-RTR-024-01, TC-RTR-024-02, TC-RTR-024-03, TC-RTR-024-04 | covered | Partial |
 | RTR-025 | TC-RTR-025-01 | covered | Implemented |
+| RTR-026 | TC-RTR-026-01, TC-RTR-026-02, TC-RTR-026-03, TC-RTR-026-04, TC-RTR-026-05, TC-RTR-026-06, TC-RTR-026-07, TC-RTR-026-08 | covered | Implemented |
+| RTR-027 | TC-RTR-027-01, TC-RTR-027-02, TC-RTR-027-03, TC-RTR-027-04, TC-RTR-027-05, TC-RTR-027-06, TC-RTR-027-07 | covered | Implemented |
 | TAX-001 | TC-TAX-001-01, TC-TAX-001-02, TC-TAX-001-03, TC-TAX-001-04, TC-TAX-001-05 | covered | Implemented |
 | TAX-002 | TC-TAX-002-01 | covered | Implemented |
 | TAX-003 | TC-TAX-003-01 | covered | Implemented |
@@ -3464,6 +3496,7 @@ Every requirement, its test cases, whether an existing check covers it, and its 
 | INT-023 | TC-INT-023-01, TC-INT-023-02 | covered | Implemented |
 | INT-024 | TC-INT-024-01 | covered | Implemented |
 | INT-025 | TC-INT-025-01 | TO WRITE | Gap |
+| INT-026 | TC-INT-026-01, TC-INT-026-02 | covered | Implemented |
 | INC-001 | TC-INC-001-01 | covered | Implemented |
 | INC-002 | TC-INC-002-01 | TO WRITE | Partial |
 | INC-003 | TC-INC-003-01 | TO WRITE | Partial |
@@ -3521,11 +3554,11 @@ Every requirement, its test cases, whether an existing check covers it, and its 
 | 5. Liquidity Outlook (LIQ) | 13 | 2 | 11 | 0 |
 | 6. Returns (RET) | 12 | 2 | 10 | 0 |
 | 7. Deal Library (LIB) and What If I Add This Deal? (WIF) | 27 | 15 | 10 | 2 |
-| 8. Retirement (RTR) | 25 | 18 | 7 | 0 |
+| 8. Retirement (RTR) | 27 | 20 | 7 | 0 |
 | 9. Tax Strategies (TAX, HM, WFH, ROTH, CSG, OG, SOL, INV) | 35 | 33 | 2 | 0 |
 | 10. Help (HLP) | 8 | 4 | 4 | 0 |
 | 11. Private-deal model (DM), cross-cutting | 22 | 9 | 13 | 0 |
-| 12. Spreadsheet intake and validation (INT), cross-cutting | 25 | 17 | 6 | 2 |
+| 12. Spreadsheet intake and validation (INT), cross-cutting | 26 | 18 | 6 | 2 |
 | 13. Plan includes (INC), cross-cutting | 5 | 3 | 2 | 0 |
 | 14. State and reset (STA), cross-cutting | 4 | 3 | 1 | 0 |
 | 15. Number parsing rules (NUM), cross-cutting | 5 | 4 | 1 | 0 |
@@ -3535,6 +3568,6 @@ Every requirement, its test cases, whether an existing check covers it, and its 
 | 19. Dark mode (DRK), cross-cutting | 3 | 1 | 1 | 1 |
 | 20. Mobile (MOB), cross-cutting | 4 | 2 | 1 | 1 |
 | 21. Quality gates for the React build (QG) and deal-library governance (LIB), owner decisions | 8 | 0 | 1 | 7 |
-| **Total** | **280** | **165** | **102** | **13** |
+| **Total** | **283** | **168** | **102** | **13** |
 
-Requirements with at least one mapped existing check: 169. Requirements whose test case is TO WRITE: 111.
+Requirements with at least one mapped existing check: 172. Requirements whose test case is TO WRITE: 111.

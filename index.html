@@ -41,6 +41,7 @@
   tr:last-child td{border-bottom:none}
   .z{color:#C7C7CC}
   .neg{color:var(--red);font-weight:600}
+  .rw-calls tr.rw-uncov td{background:#FFECEE}
   .pos{color:var(--green)}
   .b{font-weight:600}
   .hi{background:#F2F8F3}
@@ -251,6 +252,7 @@
     .mk-form input,.mk-form select,.tx-f select,.tx-in input,.mk-inline input{background:#2C2C2E;color:var(--ink);border-color:var(--rule)}
     .pill.ok{background:#12301A} .pill.warn{background:#3A2A12} .pill.bad{background:#3A1214} .pill.up{background:#0B1A2B}
     .hi{background:#12301A} .z{color:#636366}
+    .rw-calls tr.rw-uncov td{background:#3A1214}
     .mk-halo{stroke:var(--card)} .mk-rb>div{background:#2C2C2E}
     .ver{background:rgba(44,44,46,.85)} .modal p,.modal li{color:#D1D1D6} .modal .tag{background:#2C2C2E}
     #out svg text{fill:var(--ink)} #out svg .ax{fill:var(--muted)}
@@ -396,26 +398,26 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="engine.js?v=h1"></script>
+<script src="engine.js?v=q21"></script>
 <!-- THE FORK POINT, and the only place the two apps differ. runway.js and runway-ui.js load
      BEFORE app.js because the tab registers itself on window.APP_PLUGINS, which app.js reads
      once as it builds its tab list. Load them after and the tab silently never appears. -->
 <!-- app.js fetches the example book tagged with the engine version, so an edited book with the
      same version is served from the browser cache. Refresh that cache entry on every load. -->
 <script>try { fetch('example-book.json?v=' + encodeURIComponent(Engine.CFG.version), { cache: 'reload' }); } catch (e) {}</script>
-<script src="history.js?v=h1"></script>
-<script src="markets.js?v=h1"></script>
-<script src="runway.js?v=h1"></script>
-<script src="portfolio.js?v=h1"></script>
-<script src="runway-ui.js?v=h1"></script>
-<script src="taxplay.js?v=h1"></script>
-<script src="taxes-ui.js?v=h1"></script>
-<script src="includes.js?v=h1"></script>
-<script src="consider-ui.js?v=h1"></script>
-<script src="markets-ui.js?v=h1"></script>
-<script src="ux.js?v=h1"></script>
+<script src="history.js?v=q21"></script>
+<script src="markets.js?v=q21"></script>
+<script src="runway.js?v=q21"></script>
+<script src="portfolio.js?v=q21"></script>
+<script src="runway-ui.js?v=q21"></script>
+<script src="taxplay.js?v=q21"></script>
+<script src="taxes-ui.js?v=q21"></script>
+<script src="includes.js?v=q21"></script>
+<script src="consider-ui.js?v=q21"></script>
+<script src="markets-ui.js?v=q21"></script>
+<script src="ux.js?v=q21"></script>
 <script>window.APP_TAB_LABELS = { dash: 'Deals', outlook: 'Liquidity Outlook', perf: 'Returns',
   about: 'Help', universe: 'Deal Library' };</script>
-<script src="app.js?v=h1"></script>
+<script src="app.js?v=q21"></script>
 </body>
 </html>

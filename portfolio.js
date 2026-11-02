@@ -99,10 +99,15 @@
     ['inflPost', ['inflation after', 'inflation post', 'inflation in retirement']],
     ['benefitAge', ['benefit start age', 'benefit age', 'claim age', 'social security age']],
     ['benefitAnnual', ['estimated annual benefit', 'annual benefit', 'benefit', 'social security']],
+    /* Tax Strategies' baseline, so a member does not retype it on that tab. Retirement does
+       not read these three (runway-ui.js skips them). */
+    ['filingStatus', ['filing status', 'tax filing']],
+    ['w2Now', ['household income', 'w-2 income', 'w2 income', 'earned income']],
+    ['retireIncome', ['taxable income after', 'income after you stop', 'retirement income']],
   ];
 
   /* You tab -> { birthYear, stopYear, planToAge, spend, floorSpend, inflPre, inflPost,
-     benefitAge, benefitAnnual, _sheet, _fields } with only the fields the sheet names, or
+     benefitAge, benefitAnnual, filingStatus, w2Now, retireIncome, _sheet, _fields } with only the fields the sheet names, or
      null. Years and ages are integers, money in dollars, inflation a fraction. */
   function parseYou(sheets) {
     let found = null;
@@ -117,8 +122,14 @@
         for (const [field, names] of YOU_KEYS) {
           if (got[field] != null) continue;
           if (names.some((n) => k === n || k.startsWith(n))) {
-            const v = row.slice(1).find((c) => c != null && c !== '');
-            if (v != null) { got[field] = v; hits++; }
+            /* The value is column B and only column B. Column C is the template's
+               explanation; reading the first non-blank cell turned a blank birth year into
+               the number in "Ages are worked out from this" (0), which then passed as an
+               answer. A blank B is a missing figure. A label match still counts towards
+               finding the tab, so a half-filled You tab is found and its gaps are named. */
+            const v = row[1];
+            if (v != null && String(v).trim() !== '' && (field === 'filingStatus' || Number.isFinite(Number(String(v).replace(/[$,%\s]/g, ''))))) got[field] = v;
+            hits++;
             break;
           }
         }
@@ -140,6 +151,16 @@
     if (g.inflPost != null) out.inflPost = pctOf(g.inflPost);
     if (g.benefitAge != null) out.benefitAge = parseInt(num(g.benefitAge), 10);
     if (g.benefitAnnual != null) out.benefitAnnual = num(g.benefitAnnual);
+    /* Filing status: anything saying single is single; married, joint or MFJ is joint. An
+       unreadable value is dropped, so the tab's own default stands. */
+    if (g.filingStatus != null) {
+      const fs = low(g.filingStatus);
+      if (/single/.test(fs)) out.filingStatus = 'single';
+      else if (/joint|married|mfj/.test(fs)) out.filingStatus = 'mfj';
+      else out._fields = out._fields.filter((f) => f !== 'filingStatus');
+    }
+    if (g.w2Now != null) out.w2Now = num(g.w2Now);
+    if (g.retireIncome != null) out.retireIncome = num(g.retireIncome);
     return out;
   }
 

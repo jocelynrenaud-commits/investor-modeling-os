@@ -154,7 +154,7 @@ async function runDeal(H) { H.$('#consider [data-csrun]').click(); await settle(
   ok(/above \$0/.test(H.$('#consider').textContent), 'a zero commitment is refused');
   await pickDeal(H, 'aerolane', { commitment: 3000000 });
   await runDeal(H);
-  ok(/more than all your public investments/.test(H.$('#consider').textContent) && !w.ConsiderUI.S.result, 'QA C2 a commitment above the public investments is refused');
+  ok(/More than your public money/.test(H.$('#consider').textContent) && w.ConsiderUI.S.result && w.ConsiderUI.S.result.short != null, 'QA C2 a commitment above the public investments runs, with the shortfall warning');
   await pickDeal(H, 'aerolane', { commitment: 50000 });
   await runDeal(H);
   ok(w.ConsiderUI.S.result && !w.ConsiderUI.S.result.error, 'a valid deal runs: ' + JSON.stringify(w.ConsiderUI.S.result && w.ConsiderUI.S.result.error));
@@ -211,8 +211,93 @@ async function runDeal(H) { H.$('#consider [data-csrun]').click(); await settle(
   ok(H.$('#out [data-tab].on').getAttribute('data-tab') === 'overview', 'QA L11 every new book lands on Overview');
   await tab(H, 'universe'); await settle(w, 40);
   await pickDeal(H, 'aerolane', { commitment: 10000 }); await runDeal(H);
-  ok(w.ConsiderUI.S.result && w.ConsiderUI.S.result.eff, 'the tester runs against book 2');
+  ok(w.ConsiderUI.S.result && !w.ConsiderUI.S.result.error && w.ConsiderUI.S.result.p50 > 0, 'the tester runs against book 2');
+  ok(!w.ConsiderUI.S.result.eff && w.ConsiderUI.S.result.need && /appears once your file has/.test(H.$('#consider').textContent),
+    'Q20 on a file without the You tab the tester holds back its retirement figures and says why');
   ok(!H.errors.length, 'reset: no script errors ' + H.errors.slice(0, 2).join(' | '));
+}
+
+/* ── A private-only file never shows the sample household (tester book, 2026-11-01) ── */
+{
+  const H = await boot(); const w = H.w;
+  await upload(H, BOOK2);
+  const mk = w.Markets.load(w.PlanIncludes.ctx.sheets);
+  ok(mk.source === 'none' && mk.holdings.length === 0 && !mk.isDemo, 'private-only file: no public holdings, not the sample: ' + mk.source);
+  for (const t of ['overview', 'holdings', 'curve']) { await tab(H, t); ok(!/Sample household/.test(H.$('#out').textContent), 'private-only file: ' + t + ' does not show the sample household'); }
+  await tab(H, 'runway'); await settle(w, 40);
+  const rt = H.$('#out').textContent;
+  ok(/needs 6 more figures/.test(rt) && !/Chance the money lasts/.test(rt) && !/Sample household/.test(rt), 'Q20 private-only file: Retirement asks for its figures instead of running on the sample');
+  ok(['Birth year', 'Planned stop work year', 'Annual spend target', 'Estimated annual benefit', 'Benefit start age', 'A Balances tab'].every((l) => rt.indexOf(l) >= 0),
+    'Q20 the request names every missing figure as it is typed on the You tab');
+  const c = w.RunwayUI.baseConfig(w.PlanIncludes.ctx).C;
+  ok(c.noPublic && c.sleeves.length === 1 && c.sleeves[0].balance === 1, 'private-only file: one $1 cash sleeve for deal cash');
+  ok(!H.errors.length, 'private-only file: no script errors ' + H.errors.slice(0, 2).join(' | '));
+}
+
+/* ── Q20: a member's file must carry the plan's figures before Retirement runs ── */
+{
+  const H = await boot(); const w = H.w;
+  const YOU_ALL = [['You'], ['Field', 'Your number'], ['Birth year', 1968], ['Planned stop work year', 2030], ['Annual spend target', '$150,000'],
+    ['Estimated annual benefit', 0], ['Benefit start age', 70], ['Filing status', 'Single'], ['Household income', 250000], ['Taxable income after you stop', 60000]];
+  const BAL0 = [['Balances'], ['Account', 'Account type', 'Sleeve', 'Label', 'Value'], ['Checking', 'Taxable', 'Cash', 'Cash', 0]];
+  await upload(H, { Positions: POS, You: YOU_ALL.slice(0, 6), Balances: BAL0 });
+  await tab(H, 'runway'); await settle(w, 40);
+  let rt = H.$('#out').textContent;
+  const need = [...H.$('#out').querySelectorAll('.rw-need li')].map((li) => li.textContent);
+  ok(/needs 1 more figure /.test(rt) && need.length === 1 && need[0] === 'Benefit start age',
+    'Q20 only the one missing figure is asked for; a 0 benefit counts as an answer: ' + need.join(', '));
+  await upload(H, { Positions: POS, You: YOU_ALL, Balances: BAL0 });
+  await tab(H, 'runway'); await settle(w, 40);
+  rt = H.$('#out').textContent;
+  ok(!/more figure/.test(rt) && /Chance the money lasts/.test(rt) && /no public money/.test(rt), 'Q20 a complete file runs, and a Balances tab of 0 reads as no public money');
+  const c = w.RunwayUI.baseConfig(w.PlanIncludes.ctx).C;
+  ok(c.birthYear === 1968 && c.stopYear === 2030 && c.spend === 150000 && c.benefitAnnual === 0 && c.benefitAge === 70 && c.noPublic,
+    'Q20 the plan uses the member’s own figures');
+  ok(c.filingStatus === undefined && c.w2Now === undefined, 'the tax-only You fields stay out of the plan config');
+  await tab(H, 'tax'); await settle(w, 20);
+  ok(w.TaxStrategies.S.local.status === 'single' && w.TaxStrategies.S.local.w2Now === 250000 && w.TaxStrategies.S.local.retireIncome === 60000,
+    'Tax Strategies baseline is seeded from the You tab');
+  const blankB = w.Portfolio.parseYou({ You: [['Birth year', '', 'Ages are worked out from this'], ['Planned stop work year', 2030, ''], ['Annual spend target', 'TBD', '']] });
+  ok(blankB && blankB.birthYear === undefined && blankB.spend === undefined && blankB.stopYear === 2030,
+    'a blank or unreadable You value is missing, never the explanation beside it');
+  ok(w.RunwayUI.missing({ book: w.PlanIncludes.ctx.book, sheets: {} }) === null && w.RunwayUI.missing({ book: [] }) === null, 'the example book and the sample household are never gated');
+  ok(!H.errors.length, 'Q20: no script errors ' + H.errors.slice(0, 2).join(' | '));
+}
+
+/* ── Q21: capital calls before the stop year, as numbers, with the first uncovered year marked ── */
+{
+  const H = await boot(); const w = H.w;
+  const CALLS = [['Deal name', 'Account', 'Asset class', 'Commitment', 'Funded to date', 'Uncalled', 'Year funded', 'Next Call Date', 'Next Call Amount', 'Hold (yrs)', 'Coupon %'],
+    ['Credit Fund', 'Personal', 'Private Credit', 400000, 96000, 304000, 2026, 'Q1 2027', 20000, 8, '12%'],
+    ['Venture Fund', 'Personal', 'VC', 500000, 125000, 375000, 2025, 'Q4 2026', 37500, 10, '']];
+  const YOU_ALL = [['You'], ['Field', 'Your number'], ['Birth year', 1968], ['Planned stop work year', 2030], ['Annual spend target', 150000],
+    ['Estimated annual benefit', 30000], ['Benefit start age', 67]];
+  const BALX = (v) => [['Balances'], ['Account', 'Account type', 'Sleeve', 'Label', 'Value'], ['Checking', 'Taxable', 'Cash', 'Cash', v]];
+  await upload(H, { Positions: CALLS, You: YOU_ALL, Balances: BALX(100000) });
+  await tab(H, 'runway'); await settle(w, 40);
+  const card = H.$('#out .rw-calls');
+  ok(card && /Capital calls before you stop/i.test(card.textContent), 'Q21 a member file with calls before the stop year shows the capital-calls panel');
+  const rows = card ? [...card.querySelectorAll('tr')].slice(1) : [];
+  const yrs = rows.map((tr) => parseInt(tr.cells[0].textContent, 10));
+  ok(rows.length && yrs.every((y) => y < 2030), 'Q21 the panel lists only years before the stop year: ' + yrs.join(','));
+  const sched = w.PlanIncludes.callsDated(w.PlanIncludes.ctx.book);
+  const tot = Object.keys(sched).filter((y) => +y < 2030).reduce((a, y) => a - sched[y].net, 0);
+  const cum = rows.length ? Number(rows[rows.length - 1].cells[2].textContent.replace(/[$,]/g, '')) : -1;
+  ok(Math.abs(cum - Math.round(tot)) <= 1, 'Q21 the running total ties to the engine call schedule: ' + cum + ' vs ' + Math.round(tot));
+  const hi = card ? card.querySelectorAll('tr.rw-uncov') : [];
+  const firstGap = rows.findIndex((tr) => /[1-9]/.test(tr.cells[3].textContent));
+  ok(hi.length === 1 && rows.indexOf(hi[0]) === firstGap && /first year not covered/.test(hi[0].textContent),
+    'Q21 exactly one row is highlighted, the first year the calls outrun the public money');
+  ok(card && /Public money in your file: \$100,000/.test(card.textContent) && !/should|must|risk/i.test(card.textContent),
+    'Q21 the panel states the numbers and gives no verdict');
+  await upload(H, { Positions: CALLS, You: YOU_ALL, Balances: BALX(5000000) });
+  await tab(H, 'runway'); await settle(w, 40);
+  const c2 = H.$('#out .rw-calls');
+  ok(c2 && !c2.querySelector('tr.rw-uncov') && /Not covered: \$0/.test(c2.textContent), 'Q21 calls the file can cover are listed with nothing highlighted');
+  await upload(H, { Positions: POS, You: YOU_ALL, Balances: BALX(100000) });
+  await tab(H, 'runway'); await settle(w, 40);
+  ok(!H.$('#out .rw-calls'), 'Q21 a book with nothing left to call shows no capital-calls panel');
+  ok(!H.errors.length, 'Q21: no script errors ' + H.errors.slice(0, 2).join(' | '));
 }
 
 console.log('ui: ' + checks + ' checks, ' + fails + ' failures');

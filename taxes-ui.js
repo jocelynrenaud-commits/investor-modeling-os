@@ -636,7 +636,7 @@
 
   /* Start over: an empty plan, the default baseline, no messages. Called when a new book loads. */
   function reset() {
-    S.plan.length = 0; S.growth = null; S.msgs = {}; S.focusNext = null;
+    S.plan.length = 0; S.growth = null; S.msgs = {}; S.focusNext = null; S.seeded = null;
     Object.assign(S.local, PROFILE_DEFAULTS);
   }
   /* A new book (a different ctx.book) means a different household: start a new plan. Only
@@ -647,6 +647,20 @@
     if (!b) return;
     if (S.book && S.book !== b) reset();
     S.book = b;
+  }
+  /* THE MEMBER'S OWN BASELINE. The You tab can carry Filing status, Household income and
+     Taxable income after you stop; they replace the defaults once per book, the first time
+     the tab draws it, so a reader's later edits on this tab are not overwritten. */
+  function seedFromSheet(ctx) {
+    const b = ctx && ctx.book;
+    if (!b || S.seeded === b) return;
+    S.seeded = b;
+    let you = null;
+    try { you = root.RunwayUI && root.RunwayUI.you ? root.RunwayUI.you(ctx) : null; } catch (e) { you = null; }
+    if (!you) return;
+    if (you.filingStatus === 'mfj' || you.filingStatus === 'single') S.local.status = you.filingStatus;
+    if (Number.isFinite(you.w2Now)) S.local.w2Now = you.w2Now;
+    if (Number.isFinite(you.retireIncome)) S.local.retireIncome = you.retireIncome;
   }
   /* Move items that now start in the past (the year rolled over during the session) to this
      year, so Retirement, which starts at this year, still sees their first year. */
@@ -929,6 +943,7 @@
     /* a new book resets every module through the shared hook (includes.js AppState); without
        it (tests, or this file on its own) the tab notices the new book itself */
     if (root.PlanIncludes) root.PlanIncludes.remember(ctx); else syncBook(ctx);
+    seedFromSheet(ctx);
     freshen();
     const keepFocus = S.focusNext || focusKey(host); S.focusNext = null;
     const p = profile(), Y0 = nowYear(), d = discountOf(p);
