@@ -70,21 +70,25 @@ Every chart shows its numbers on hover. Charts drawn by `app.js` that had no rea
 
 ## Run it
 ```
-python -m http.server 8791 --directory products/investor-modeling-tool/prototype
+python -m http.server 8791
 ```
 Then open http://localhost:8791 and click **Run the example book**. Everything runs in the browser; nothing is uploaded or stored.
 
 ## Test it
 ```
-node tests/taxplay_parity.test.mjs
+node tests/engine.test.mjs
+node tests/intake.test.mjs
 node tests/markets.test.mjs
-node tests/taxes.test.mjs
 node tests/plan.test.mjs
+node tests/runway.test.mjs
+node tests/taxes.test.mjs
+node tests/taxes2.test.mjs
+node tests/taxplay_parity.test.mjs
 node tests/ui.test.mjs
 ```
-Each prints `<name>: N checks, 0 failures` and exits 1 on any failure. `taxplay_parity` runs the original tax tools' code (saved copies in `tests/fixtures/`) beside the port and requires identical results year by year. `markets` covers the statistics, cones and percent cells; `plan` covers percent cells, dates, which household, dated cash, the deal tester's rules and the reset hook, in a bare `vm` context; `ui` boots the whole page in jsdom through `tests/harness.mjs` (scripts in index.html's own order, XLSX stubbed, `fetch` served from disk, `Date` pinnable) and checks what a member sees. The jsdom tests need `jsdom`: installed in this folder, or found in APEX's `node_modules`, or wherever `JSDOM_FROM` points.
+Each prints `<name>: N checks, 0 failures` and exits 1 on any failure. `taxplay_parity` runs the original tax tools' code (saved copies in `tests/fixtures/`) beside the port and requires identical results year by year. `markets` covers the statistics, cones and percent cells; `plan` covers percent cells, dates, which household, dated cash, the deal tester's rules and the reset hook, in a bare `vm` context; `ui` boots the whole page in jsdom through `tests/harness.mjs` (scripts in index.html's own order, XLSX stubbed, `fetch` served from disk, `Date` pinnable) and checks what a member sees. The jsdom tests need `jsdom`: install it in this folder (`npm install jsdom`) or point `JSDOM_FROM` at an existing `node_modules`.
 
-## Architecture (for the React port)
+## Architecture (as built; the React build's architecture is the technical partner's)
 
 **Script load order** (index.html), and why:
 
@@ -111,7 +115,7 @@ Model files (2 to 6) never touch the DOM and read other globals only at call tim
 
 **State ownership.** Each module owns its session state and nothing else: `PlanIncludes` (the include switches and the considered deal), `ConsiderUI.S` (the tester's inputs and result), `MarketsUI.S` (filters, sort, Equity Curve scope, balances recorded this session), `TaxStrategies.S` (the strategy plan), RunwayUI's slider overrides. Nothing is stored: a reload starts clean.
 
-**Reset.** `window.AppState` (includes.js) is the one reset hook. `AppState.onReset(fn)` registers `fn(reason)`; a module that loads before includes.js pushes `fn` onto `window.APP_RESET_HOOKS` instead (read at reset time). `AppState.reset(reason)` runs every hook once. It fires automatically on every new book: app.js calls `PlanIncludes.remember(ctx)` and dispatches `privatedeals:book` on each successful load, `remember` calls `AppState.noteBook(ctx)`, and a book object different from the last one seen triggers the reset. A hook clears only its own state and must not render. In React this maps to a context provider keyed on the book: everything below it remounts when the book changes.
+**Reset.** `window.AppState` (includes.js) is the one reset hook. `AppState.onReset(fn)` registers `fn(reason)`; a module that loads before includes.js pushes `fn` onto `window.APP_RESET_HOOKS` instead (read at reset time). `AppState.reset(reason)` runs every hook once. It fires automatically on every new book: app.js calls `PlanIncludes.remember(ctx)` and dispatches `privatedeals:book` on each successful load, `remember` calls `AppState.noteBook(ctx)`, and a book object different from the last one seen triggers the reset. A hook clears only its own state and must not render. Whatever the new architecture, the rule to keep is: a new book clears every module's session state.
 
 **The UX layer.** ux.js edits the rendered page through a MutationObserver because app.js must stay identical to the live app. In a port, its renames, captions, folds and Help cards become ordinary component copy and the observer goes away.
 
@@ -126,6 +130,6 @@ Model files (2 to 6) never touch the DOM and read other globals only at call tim
 - `index.html`: a new look modelled on Apple's product pages (system type, white cards on grey, a pinned frosted tab bar), prototype branding, release notes, shorter copy and tab labels (Deals, Liquidity Outlook, Returns, Deal Library, Retirement, Glossary), new script tags.
 - `example-book.json`: first-person notes removed; each deal carries an account; the two BlueBird tranches merged into one $100k row.
 
-Still to clean before anything goes public: code comments naming Growth Circle members, and the deal files' community underwrite text (see CROSSCHECK.md and the integration notes).
+Real community deal files are kept by the owner's decision; people's names have been removed from code comments and deal notes.
 
 See `CROSSCHECK.md` for the comparison with APEX.

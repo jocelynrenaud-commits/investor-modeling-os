@@ -458,6 +458,8 @@ The suites are the parity oracle for the rebuild: the model functions keep their
 
 ## 7. Target architecture for the React rebuild
 
+**The technical partner owns the stack and the architecture.** This section separates two things. The **owner decisions** (7.1, 7.7, 7.8, and the product rules in 7.4 to 7.6) are requirements: what the product must do and must never do, whatever it is built with. Everything else here (the structure in 7.2, the port rules in 7.3, named libraries, state containers, hosting in 7.9) is a **suggestion** drawn from how the prototype works. Replace any of it with the technical partner's own choices; where a suggestion and the technical partner's architecture differ, the architecture wins, as long as the owner decisions and the RTM's numbers still hold.
+
 ### 7.1 Decisions already made
 
 | # | Decision | Source |
@@ -473,7 +475,7 @@ The suites are the parity oracle for the rebuild: the model functions keep their
 | T9 | Quality gates: tie-out of every Overview total to the member's file; parity with the prototype proven by its own suites; the 5-to-40 beta gate. | Owner, 2026-11-01 (7.7) |
 | T10 | Deal-library governance: source precedence, conflicts flagged, "Not confirmed" labels, one-week loading, an intake template. | Owner grill (7.8) |
 
-### 7.2 Proposed structure
+### 7.2 Suggested structure (replace with the technical partner's)
 
 ```
 apps/web                 React app (Vite), routes = the ten tabs plus /admin
@@ -488,6 +490,8 @@ tests/parity             the existing suites, run against packages/models
 
 ### 7.3 Rules for the port
 
+Rules 1 to 3 protect the numbers and apply to any stack: the models stay pure and testable, the existing tests are the oracle, and the published tax arithmetic is kept exactly. Rules 4 to 7 describe one way to meet the RTM; the state containers, worker and component names are suggestions.
+
 1. **Models stay pure functions with the same signatures.** `buildBook`, `simulate`, `applyDealFile`, `matchDeal`, `callsOf`, `prefInYear`, `irrOf`, `pathDraws`, `portfolioStats`, `toSleeves`, `cone`, `privateCone`, `Runway.simulate`, `levers`, `medianTrace`, `diagnose`, `Portfolio.build`, `datedFlows`, `TaxPlay.*`, the four tax models, `runPlan`, `yearly`, `compound`, `validateDeal`. No React, DOM or network inside them; the clock is injected (replacing `calendarNow()` and every `new Date()` with a `now` parameter fixes the inconsistent clocks in the gap list).
 2. **The existing tests are the oracle.** Port each suite's model checks first and run them against the TypeScript modules; the numbers must match. Keep the seeds (engine 20260922, retirement 20260929, cone 20261028 + year), the mulberry32 generator, the FNV-1a and Murmur3 mixing in `streamFor`, and the draw order (timing then outcome, two draws per deal group per path); otherwise every simulated figure moves.
 3. **Keep the published tax arithmetic byte-for-byte** (`taxplay.js`) and keep the parity test with its fixtures.
@@ -498,7 +502,7 @@ tests/parity             the existing suites, run against packages/models
 
 ### 7.4 Data and privacy
 
-- **Browser-side parsing.** SheetJS in a Web Worker; the workbook never leaves the page. The parsed `sheets` and `book` live in memory only. No analytics on member data. **[OPEN]** whether to keep the page usable offline once loaded (it is today).
+- **Browser-side parsing.** The workbook never leaves the page (T1); the parser and where it runs are the technical partner's choice (the prototype uses SheetJS on the main thread). The parsed `sheets` and `book` live in memory only. No analytics on member data. **[OPEN]** whether to keep the page usable offline once loaded (it is today).
 - **Exports (T2).** (a) Print or PDF: a print stylesheet that renders a summary of every tab with the current what-ifs. (b) "Download my changes": a small JSON or CSV of the session what-ifs (slider moves, include switches, considered deal inputs, tax plan items, recorded balances) that can be loaded back. (c) "Download updated spreadsheet": the member's workbook with recorded balances appended to History and, **[OPEN]**, which other changes are written back and in which columns. **[OPEN]** the file format of (b) and whether it is versioned.
 - **Upload validation report** and an **unsaved-change warning** before leaving the page when what-ifs exist (grill log Q2 best practices).
 
@@ -532,7 +536,7 @@ tests/parity             the existing suites, run against packages/models
 
 ### 7.9 Hosting and delivery
 
-**[OPEN]** host (a shared virtual server or a static host plus a small API), domain, and environments. Proposed CI: type-check, lint (including the vocabulary and no-dash rules), unit and parity suites, the jsdom or Playwright page suites, and an accessibility check, on every push; a preview build per branch.
+The technical partner's decision: host, domain, environments and CI. Whatever is chosen must keep T1 (no member data stored) and run the parity gate (QG-002) on every change. A CI that has worked for the prototype's checks: type-check, lint (including the vocabulary and no-dash rules), unit and parity suites, the jsdom or Playwright page suites, and an accessibility check, on every push; a preview build per branch.
 
 ### 7.10 Open questions
 
